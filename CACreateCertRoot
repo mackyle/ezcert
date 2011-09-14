@@ -2,7 +2,7 @@
 
 # CACreateCertRoot - Create a Root Certificate Authority
 # Copyright (C) 2011 Kyle J. McKay.  All rights reserved.
-# Version 1.0
+# Version 1.0.1
 
 exit(&main());
 
@@ -12,6 +12,7 @@ use bytes;
 
 use MIME::Base64;
 use IPC::Open2;
+use Digest::MD5 qw(md5 md5_hex md5_base64);
 use Getopt::Long qw(:config gnu_getopt);
 
 my $VERSION;
@@ -367,8 +368,13 @@ sub ReadDERLength($)
 sub GetKeyInfo($)
 {
   # Input is an RSA PRIVATE KEY in DER format
-  # Output is how many bits in the modulus and the public exponent and the id
-  #   or undef if unparseable
+  # Output is an array of:
+  #   how many bits in the modulus
+  #   the public exponent
+  #   the key id
+  #   the OpenSSH md5 fingerprint
+  #   the OpenSSH sha1 fingerprint
+  # or undef if the key is unparseable
   #
   # Expected format is:
   #   SEQUENCE {
@@ -387,6 +393,8 @@ sub GetKeyInfo($)
 
   no warnings;
   my $der = shift;
+  my $rawmod;
+  my $rawexp;
 
   return undef if unpack('C',substr($der,0,1)) != 0x30;
   my ($len, $lenbytes) = ReadDERLength(substr($der,1));
@@ -416,6 +424,7 @@ sub GetKeyInfo($)
   my $derexp = substr($der, $len);
   substr($der, $len) = '';
   return undef unless $len >= 1;
+  $rawmod = $der;
   my $bits = length($der) * 8;
   # But we have to discount any leading 0 bits in the first byte
   my $byte = unpack('C',substr($der,0,1));
@@ -436,6 +445,7 @@ sub GetKeyInfo($)
   substr($der, 0, 1 + $lenbytes) = '';
   return undef unless length($der) == $len && $len >= 1;
   return undef if unpack('C',substr($der,0,1)) & 0x80; # negative pub exp bad
+  $rawexp = $der;
   my $exp;
   if ($len > 8) {
     # Fudge the result because it's bigger than a 64-bit number
@@ -450,8 +460,11 @@ sub GetKeyInfo($)
       substr($der,0,1) = '';
     }
   }
-  
-  return ($bits,$exp,$id);
+
+  my $tohash = pack('N',7)."ssh-rsa".pack('N',length($rawexp)).$rawexp
+    .pack('N',length($rawmod)).$rawmod;
+
+  return ($bits,$exp,$id,md5($tohash),sha1($tohash));
 }
 
 sub BreakLine($$)
@@ -514,6 +527,13 @@ sub toupper($)
 {
   my $str = shift;
   $str =~ tr/a-z/A-Z/;
+  return $str;
+}
+
+sub tolower($)
+{
+  my $str = shift;
+  $str =~ tr/A-Z/a-z/;
   return $str;
 }
 
@@ -604,11 +624,16 @@ sub main
       unless !!($pubkey = <READKEY>);
     close(READKEY);
   }
-  my ($pubkeybits,$pubkeyexp,$pubkeyid) = GetKeyInfo($pubkey);
+  my ($pubkeybits,$pubkeyexp,$pubkeyid,$fmd5,$fsha1) = GetKeyInfo($pubkey);
   die "Unparseable public key format in $keyfile\n" unless $pubkeybits;
-  print STDERR "$keyfile:\n    bits=$pubkeybits pubexp=$pubkeyexp\n" if $verbose;
-  print STDERR "    keyid=",join(":",toupper(unpack("H*",$pubkeyid))=~/../g),"\n"
-    if $verbose;
+  print STDERR "RSA Private Key $keyfile:\n",
+    "  bits=$pubkeybits pubexp=$pubkeyexp\n" if $verbose;
+  print STDERR "  keyid=",
+    join(":", toupper(unpack("H*",$pubkeyid))=~/../g), "\n" if $verbose;
+  print STDERR "  fingerprint(md5)=",
+    join(":", tolower(unpack("H*",$fmd5))=~/../g), "\n" if $verbose;
+  print STDERR "  fingerprint(sha1)=",
+    join(":", tolower(unpack("H*",$fsha1))=~/../g), "\n" if $verbose;
   die "*** Error: Input key has less than 512 bits ($pubkeybits)\n"
     . "***        You might as well just donate your system to hackers now.\n"
     if $pubkeybits < 512;
