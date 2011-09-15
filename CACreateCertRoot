@@ -2,7 +2,7 @@
 
 # CACreateCertRoot - Create a Root Certificate Authority
 # Copyright (C) 2011 Kyle J. McKay.  All rights reserved.
-# Version 1.0.1
+# Version 1.1
 
 exit(&main());
 
@@ -123,6 +123,25 @@ DESCRIPTION
        RSA keys with a public exponent of 65537 otherwise openssl genrsa can
        be used together with ssh-keygen -y to create a suitable OpenSSH key.
 
+       There are a few seldom-used options not shown in the usage example
+       above.  The --now option can be given to set the validity not before
+       date to the current time rather than the beginning of the X.509v3
+       standard's approval.  While this option will not create distinct root
+       certificates for the purposes of certificate chain approval, it will
+       cause the actual certificate data output by CACreateCertRoot to differ
+       each time it's run.  The --random option can be given to generate a
+       random serial number and include it in the certificate name as well as
+       make it the certificate's serial number.  Using this option will produce
+       a new, distinct, root certificate each time CACreateCertRoot is run.  If
+       neither of these two options is used, then for any given pair of RSA
+       private key and "common name", CACreateCertRoot will always output a
+       bytewise-identical certificate which means that only the RSA private key
+       and common name is needed to recreate the certificate at any time.
+
+       With the --check option, a new certificate is not output, but all the
+       key checks are still run.
+
+TIPS
        Display the currently available version of OpenSSL with:
 
            openssl version
@@ -130,9 +149,6 @@ DESCRIPTION
        Display the currently available version of OpenSSH with:
 
            ssh -V
-
-       With the --check option, a new certificate is not output, but all the
-       key checks are still run.
 HELP
 }
 
@@ -254,6 +270,47 @@ sub MakeUTF8($)
     }
   }
   return $ans;
+}
+
+sub formatbold($;$)
+{
+  my $str = shift;
+  my $fancy = shift || 0;
+  if ($fancy) {
+    $str = join('',map($_."\b".$_, split(//,$str)));
+  }
+  return $str;
+}
+
+sub formatul($;$)
+{
+  my $str = shift;
+  my $fancy = shift || 0;
+  if ($fancy) {
+    $str = join('',map("_\b".$_, split(//,$str)));
+  }
+  return $str;
+}
+
+sub formatman($;$)
+{
+  my $man = shift;
+  my $fancy = shift || 0;
+  my @inlines = split(/\n/, $man, -1);
+  my @outlines = ();
+  foreach my $line (@inlines) {
+    if ($line =~ /^[A-Z]+$/) {
+      $line = formatbold($line, $fancy);
+    }
+    else {
+      $line =~ s/'''(.+?)'''/formatbold($1,$fancy)/gse;
+      $line =~ s/''(.+?)''/formatul($1,$fancy)/gse;
+    }
+    push (@outlines, $line);
+  }
+  my $result = join("\n", @outlines);
+  $result =~ s/\\\n//gso;
+  return $result;
 }
 
 sub DERLength($)
@@ -568,17 +625,21 @@ sub main
   my $verbose = '';
   my $quiet = '';
   my $keyfile = '';
+  my $useNow = '';
+  my $useRandom = '';
   my $digest = $hasSha2 ? 'sha256' : 'sha1';
   my $digestChoice = '';
   my $debug = 0;
   my $check = '';
   my $commonName = DEROID('2.5.4.3'); # :commonName
+  my $serialNumber = DEROID('2.5.4.5'); # :serialNumber
   my $basicConstraints = DEROID('2.5.29.19');
   my $keyUsage = DEROID('2.5.29.15');
   my $authKeyId = DEROID('2.5.29.35');
   my $subjKeyId = DEROID('2.5.29.14');
   my $boolTRUE = pack('C*',0x01,0x01,0xFF);
   my $boolFALSE = pack('C*',0x01,0x01,0x00);
+  my $v3Begin = pack('C',0x17).DERLength(13)."970811000000Z";
   my $noExpiry = pack('C',0x18).DERLength(15)."99991231235959Z";
 
   #tests;
@@ -589,10 +650,24 @@ sub main
       "debug" => \$debug,
       "quiet" => \$quiet,
       "check" => \$check,
+      "now" => \$useNow,
+      "random" => \$useRandom,
       "digest=s" => \$digestChoice,
       "key|k=s" => \$keyfile
-    )} && !$help ||
-    die $help?$HELP:$USAGE;
+    )} || $help
+      or die $USAGE;
+  if ($help) {
+    local *MAN;
+    my $pager = $ENV{'PAGER'} || 'less';
+    if (-t STDOUT && open(MAN, "|-", $pager)) {
+      print MAN formatman($HELP,1);
+      close(MAN);
+    }
+    else {
+      print formatman($HELP);
+    }
+    exit(0);
+  }
   $verbose = 1 if $debug || $check;
   $quiet = 0 if $verbose || $check;
   print STDERR $VERSION if $verbose;
@@ -649,8 +724,7 @@ sub main
   return 0 if $check;
 
   my $version = pack('CCCCC', 0xA0, 0x03, 0x02, 0x01, 0x02); # v3
-  my $randval = RandomID($quiet);
-  my $serial = pack('C',0x2).DERLength(length($randval)).$randval;
+  my $randval = $useRandom ? RandomID($quiet) : undef;
   my $sigAlg = $dalg . pack('CC',0x05,0x00);
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
   my $name = MakeUTF8($ARGV[0]);
@@ -658,9 +732,30 @@ sub main
   $name = $commonName . $name;
   $name = pack('C',0x30).DERLength(length($name)).$name;
   $name = pack('C',0x31).DERLength(length($name)).$name;
+  if ($useRandom) {
+    my $serialRDN = join(":", tolower(unpack("H*",$randval))=~/../g);
+    $serialRDN = pack('C',0x13).DERLength(length($serialRDN)).$serialRDN;
+    $serialRDN = $serialNumber . $serialRDN;
+    $serialRDN = pack('C',0x30).DERLength(length($serialRDN)).$serialRDN;
+    $serialRDN = pack('C',0x31).DERLength(length($serialRDN)).$serialRDN;
+    $name = $serialRDN.$name;
+  }
   $name = pack('C',0x30).DERLength(length($name)).$name;
-  my $validity = DERTime(time()).$noExpiry;
+  my $validity = ($useNow ? DERTime(time()) : $v3Begin).$noExpiry;
   $validity = pack('C',0x30).DERLength(length($validity)).$validity;
+  my $serial;
+  if ($useRandom) {
+    $serial = pack('C',0x2).DERLength(length($randval)).$randval;
+  }
+  else {
+    my $idtohash = $validity.$name.$pubkey;
+    $idtohash = pack('C',0x30).DERLength(length($idtohash)).$idtohash;
+    my $idhash = sha1($idtohash);
+    my $byte0 = unpack('C',substr($idhash,0,1));
+    $byte0 &= 0x7F;
+    substr($idhash,0,1) = pack('C',$byte0);
+    $serial = pack('C',0x2).DERLength(length($idhash)).$idhash;
+  }
   my $extCATrue = pack('C',0x30).DERLength(length($boolTRUE)).$boolTRUE;
   $extCATrue = pack('C',0x04).DERLength(length($extCATrue)).$extCATrue;
   $extCATrue = $basicConstraints . $boolTRUE . $extCATrue;
