@@ -2,7 +2,6 @@
 
 # CACreateCertRoot - Create a Root Certificate Authority
 # Copyright (C) 2011 Kyle J. McKay.  All rights reserved.
-# Version 1.1
 
 exit(&main());
 
@@ -15,15 +14,20 @@ use IPC::Open2;
 use Digest::MD5 qw(md5 md5_hex md5_base64);
 use Getopt::Long qw(:config gnu_getopt);
 
-my $VERSION;
+our $VERSION;
+my $VERSIONMSG;
 my $HELP;
 my $USAGE;
 
 my $hasSha2;
 
 BEGIN {
-  $VERSION = "CACreateCertRoot version 1.0\n" .
+  *VERSION = \'1.1.1';
+  $VERSIONMSG = "CACreateCertRoot version $VERSION\n" .
     "Copyright (C) 2011 Kyle J. McKay.  All rights reserved.\n";
+}
+
+BEGIN {
   $hasSha2 = 0;
 
   eval {
@@ -139,7 +143,7 @@ DESCRIPTION
        and common name is needed to recreate the certificate at any time.
 
        With the --check option, a new certificate is not output, but all the
-       key checks are still run.
+       validity checks are still run.
 
 TIPS
        Display the currently available version of OpenSSL with:
@@ -637,7 +641,7 @@ sub main
   eval {GetOptions(
       "help|h" => sub{$help=1;die"!FINISH"},
       "verbose|v" => \$verbose,
-      "version|V" => sub{print STDERR $VERSION;exit(0)},
+      "version|V" => sub{print STDERR $VERSIONMSG;exit(0)},
       "debug" => \$debug,
       "quiet" => \$quiet,
       "check" => \$check,
@@ -661,7 +665,7 @@ sub main
   }
   $verbose = 1 if $debug || $check;
   $quiet = 0 if $verbose || $check;
-  print STDERR $VERSION if $verbose;
+  print STDERR $VERSIONMSG if $verbose;
   die $USAGE if !$keyfile || (!$check && @ARGV != 1);
   die "Cannot read key file $keyfile\n" if ! -r $keyfile;
   my ($did, $dalg, $dfunc) = GetDigest($digestChoice || $digest);
@@ -734,19 +738,6 @@ sub main
   $name = pack('C',0x30).DERLength(length($name)).$name;
   my $validity = ($useNow ? DERTime(time()) : $v3Begin).$noExpiry;
   $validity = pack('C',0x30).DERLength(length($validity)).$validity;
-  my $serial;
-  if ($useRandom) {
-    $serial = pack('C',0x2).DERLength(length($randval)).$randval;
-  }
-  else {
-    my $idtohash = $validity.$name.$pubkey;
-    $idtohash = pack('C',0x30).DERLength(length($idtohash)).$idtohash;
-    my $idhash = sha1($idtohash);
-    my $byte0 = unpack('C',substr($idhash,0,1));
-    $byte0 &= 0x7F;
-    substr($idhash,0,1) = pack('C',$byte0);
-    $serial = pack('C',0x2).DERLength(length($idhash)).$idhash;
-  }
   my $extCATrue = pack('C',0x30).DERLength(length($boolTRUE)).$boolTRUE;
   $extCATrue = pack('C',0x04).DERLength(length($extCATrue)).$extCATrue;
   $extCATrue = $basicConstraints . $boolTRUE . $extCATrue;
@@ -766,6 +757,19 @@ sub main
   my $exts = $extCATrue . $extKeyUse . $extSubjKey . $extAuthKey;
   $exts = pack('C',0x30).DERLength(length($exts)).$exts;
   $exts = pack('C',0xA3).DERLength(length($exts)).$exts;
+  my $serial;
+  if ($useRandom) {
+    $serial = pack('C',0x2).DERLength(length($randval)).$randval;
+  }
+  else {
+    my $idtohash = $version.$sigAlg.$name.$validity.$name.$pubkey.$exts;
+    $idtohash = pack('C',0x30).DERLength(length($idtohash)).$idtohash;
+    my $idhash = sha1($idtohash);
+    my $byte0 = unpack('C',substr($idhash,0,1));
+    $byte0 &= 0x7F;
+    substr($idhash,0,1) = pack('C',$byte0);
+    $serial = pack('C',0x2).DERLength(length($idhash)).$idhash;
+  }
   my $tbs = $version.$serial.$sigAlg.$name.$validity.$name.$pubkey.$exts;
   $tbs = pack('C',0x30).DERLength(length($tbs)).$tbs;
   my $tbsseq = &$dfunc($tbs);
