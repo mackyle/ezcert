@@ -22,7 +22,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.0';
+  *VERSION = \'1.1.1';
   $VERSIONMSG = "CACreateCertClient version $VERSION\n" .
     "Copyright (C) 2011 Kyle J. McKay.  All rights reserved.\n";
 }
@@ -85,13 +85,13 @@ BEGIN {
 BEGIN {
   $USAGE = <<USAGE;
 Usage: CACreateCertClient [-h] [--digest=sha1|sha224|sha256|sha384|sha512]
-         [--check] --cert signing_cert --key key_file "username"
+         [--check] [--pubx509] --cert signing_cert --key key_file "username"
          < client_openssh_key.pub > out_cert.pem
 USAGE
   $HELP = <<HELP;
 NAME
        CACreateCertClient [-h] [--digest=sha1|sha224|sha256|sha384|sha512]
-         [--check] --cert signing_cert --key key_file "username"
+         [--check] [--pubx509] --cert signing_cert --key key_file "username"
          < client_openssh_key.pub > out_cert.pem
 
 DESCRIPTION
@@ -115,6 +115,14 @@ DESCRIPTION
        data (such as its private key).  The resulting certificate that is
        created also need not be protected as it cannot be used without the
        client's private key (which presumably the client protects access to).
+
+       If --pubx509 is used then the client's RSA public key should be provided
+       on standard input in OpenSSL X.509 public key format (i.e. the output of
+       the "openssl rsa -pubout" or "openssl x509 -noout -pubkey" commands)
+       instead of in OpenSSH format.  This can be more convenient if the
+       client's public key is readily available from a certificate (where it
+       can be easily extracted into OpenSSL X.509 public key format) but is not
+       otherwise readily available in OpenSSH public key format.
 
        The key_file must be an RSA private key file in PEM format and
        furthermore it must not have a password (both openssl genrsa and
@@ -883,9 +891,11 @@ sub main
   my $termOK = '';
   my $server = '';
   my $codesign = '';
+  my $subca = '';
   my $digest = $hasSha2 ? 'sha256' : 'sha1';
   my $digestChoice = '';
   my $debug = 0;
+  my $pubx509 = '';
   my $check = '';
   my $commonName = DEROID('2.5.4.3'); # :commonName
   my $userId = DEROID('0.9.2342.19200300.100.1.1'); # :userId
@@ -909,12 +919,15 @@ sub main
       "version|V" => sub{print STDERR $VERSIONMSG;exit(0)},
       "debug" => \$debug,
       "quiet" => \$quiet,
+      "pubx509" => \$pubx509,
+      "pubX509" => \$pubx509,
       "check" => \$check,
       "now" => \$useNow,
       "random" => \$useRandom,
       "t" => \$termOK,
       "server" => \$server,
       "codesign" => \$codesign,
+      "subca" => \$subca,
       "digest=s" => \$digestChoice,
       "key|k=s" => \$keyfile,
       "cert|c=s" => \$certfile
@@ -935,12 +948,19 @@ sub main
   $verbose = 1 if $debug || $check;
   $quiet = 0 if $verbose || $check;
   print STDERR $VERSIONMSG if $verbose;
+  my $keytype = 'OpenSSH';
+  $keytype = 'pubx509' if $pubx509;
   die $USAGE if !$keyfile || !$certfile || (!$check && @ARGV != 1);
-  die "Standard input is a tty (which is an unlikely source of a .pub key)\n"
+  die "Standard input is a tty (which is an unlikely source of a $keytype "
+    . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
     if -t STDIN && !$termOK;
-  !!(my $opensshdotpub = <STDIN>)
-    or die "Cannot read OpenSSH .pub key from STDIN\n";
+  my $opensshdotpub;
+  {
+    local $/ if $pubx509;
+    !!($opensshdotpub = <STDIN>)
+      or die "Cannot read $keytype public key from STDIN\n";
+  }
   die "Cannot read key file $keyfile\n" if ! -r $keyfile;
   die "Cannot read certificate file $certfile\n" if ! -r $certfile;
   my ($did, $dalg, $dfunc) = GetDigest($digestChoice || $digest);
@@ -952,30 +972,56 @@ sub main
     if !$quiet && $digest eq 'sha1';
   print STDERR "Using digest $digest\n" if $verbose;
 
-  my ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub) =
-    GetOpenSSHKeyInfo($opensshdotpub);
-  die "Unparseable OpenSSH public key read from STDIN\n" unless $sshkeybits;
-  die "Unsupported OpenSSH public key type ($sshkeybits), must be ssh-rsa\n"
-    unless $sshkeyexp;
-  print STDERR "OpenSSH Public Key Info:\n",
-    "  bits=$sshkeybits pubexp=$sshkeyexp\n" if $verbose;
+  my ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub);
+  if ($pubx509) {
+    local (*READKEY, *WRITEKEY);
+    my $inform = $opensshdotpub =~ m|^[\t\n\r\x20-\x7E]*$|os ? 'PEM' : 'DER';
+    print STDERR "pubx509 -inform $inform\n" if $debug;
+    open(my $olderr, ">&STDERR") or die "Cannot dup STDERR: $!\n";
+    open(STDERR, '>', "/dev/null") or die "Cannot redirect STDERR: $!";
+    my $pid = open2(\*READKEY, \*WRITEKEY, "openssl", "rsa", "-inform",
+      $inform, "-pubin", "-outform", "DER", "-pubout");
+    open(STDERR, ">&", $olderr) or die "Cannot dup \$olderr: $!";
+    $pid or die "Cannot start openssl rsa\n";
+    print WRITEKEY $opensshdotpub;
+    close(WRITEKEY);
+    local $/;
+    die "Error reading X.509 format RSA public key from standard input\n"
+      unless !!($opensshpub = <READKEY>);
+    waitpid($pid, 0);
+    close(READKEY);
+    $sshcmnt = undef;
+    ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1) = GetKeyInfo($opensshpub);
+    die "Unparseable X.509 public key format read from standard input\n"
+      unless $sshkeybits;
+  }
+  else {
+    ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub) =
+      GetOpenSSHKeyInfo($opensshdotpub);
+    die "Unparseable OpenSSH public key read from STDIN\n" unless $sshkeybits;
+    die "Unsupported OpenSSH public key type ($sshkeybits), must be ssh-rsa\n"
+      unless $sshkeyexp;
+  }
+  print STDERR "$keytype Public Key Info:\n",
+      "  bits=$sshkeybits pubexp=$sshkeyexp\n" if $verbose;
   print STDERR "  keyid=",
     join(":", toupper(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
   print STDERR "  fingerprint(md5)=",
     join(":", tolower(unpack("H*",$sfmd5))=~/../g), "\n" if $verbose;
   print STDERR "  fingerprint(sha1)=",
     join(":", tolower(unpack("H*",$sfsha1))=~/../g), "\n" if $verbose;
-  print STDERR "  comment=",$sshcmnt||'<none present>',"\n" if $verbose;
-  die "*** Error: OpenSSH key has less than 512 bits ($sshkeybits)\n"
+  print STDERR "  comment=",$sshcmnt||'<none present>',"\n"
+    if $verbose && !$pubx509;
+  die "*** Error: $keytype key has less than 512 bits ($sshkeybits)\n"
     . "***        You might as well just donate your system to hackers now.\n"
     if $sshkeybits < 512;
-  die "*** Error: The OpenSSH key's public exponent is even ($sshkeyexp)!\n"
+  die "*** Error: The $keytype key's public exponent is even ($sshkeyexp)!\n"
     if !($sshkeyexp & 0x01);
-  warn "*** Warning: The OpenSSH key has less than 2048 bits ($sshkeybits), "
+  warn "*** Warning: The $keytype key has less than 2048 bits ($sshkeybits), "
     . "continuing anyway\n" if !$quiet && $sshkeybits < 2048;
-  die "*** Error: The OpenSSH public key's exponent of $sshkeyexp is "
+  die "*** Error: The $keytype public key's exponent of $sshkeyexp is "
     . "unacceptably weak!\n" if $sshkeyexp < 35; # OpenSSH used 35 until v5.4
-  warn "*** Warning: The OpenSSH public key's exponent ($sshkeyexp) is weak "
+  warn "*** Warning: The $keytype public key's exponent ($sshkeyexp) is weak "
     . "(< 65537), continuing anyway\n" if !$quiet && $sshkeyexp < 65537;
 
   my $inform = -T $keyfile ? 'PEM' : 'DER';
@@ -1056,7 +1102,8 @@ sub main
   }
   warn "*** Warning: subjectKeyIdentifier non-standard, continuing anyway\n"
     unless $subjkeyid eq $pubkeyid;
-  die "*** Error: The OpenSSH public key is the same as the certificate's public key.\n"
+  die "*** Error: The $keytype public key is the same as the certificate's "
+    . "public key.\n"
     . "***        They must be different for security reasons.\n"
     if $pubkey eq $opensshpub;
   return 0 if $check;
@@ -1067,24 +1114,36 @@ sub main
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
   my $name = MakeUTF8($ARGV[0]);
   $name = pack('C',0x0C).DERLength(length($name)).$name; # utf8String
-  $name = ($server || $codesign ? $commonName : $userId) . $name;
+  $name = (($server || $codesign || $subca) ? $commonName : $userId) . $name;
   $name = pack('C',0x30).DERLength(length($name)).$name;
   $name = pack('C',0x31).DERLength(length($name)).$name;
   $name = pack('C',0x30).DERLength(length($name)).$name;
   my $validity = ($useNow ? DERTime(time()) : $vst).$vnd;
   $validity = pack('C',0x30).DERLength(length($validity)).$validity;
-  my $extCAFalse = pack('C',0x30).DERLength(length($boolFALSE)).$boolFALSE;
-  $extCAFalse = pack('C',0x04).DERLength(length($extCAFalse)).$extCAFalse;
-  $extCAFalse = $basicConstraints . $extCAFalse;
-  $extCAFalse = pack('C',0x30).DERLength(length($extCAFalse)).$extCAFalse;
-  my $extKeyUse = pack('H*',$server?'0404030205A0':'040403020780');
+  my $extCAVal;
+  if ($subca) {
+    $extCAVal = pack('C',0x30).DERLength(length($boolTRUE)).$boolTRUE;
+    $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
+    $extCAVal = $basicConstraints . $boolTRUE . $extCAVal;
+  }
+  else {
+    $extCAVal = pack('C',0x30).DERLength(length($boolFALSE)).$boolFALSE;
+    $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
+    $extCAVal = $basicConstraints . $extCAVal;
+  }
+  $extCAVal = pack('C',0x30).DERLength(length($extCAVal)).$extCAVal;
+  my $extKeyBits = $subca ? '0106' : ($server ? '05A0' : '0780');
+  my $extKeyUse = pack('H*', '04040302'.$extKeyBits);
   $extKeyUse = $keyUsage . $boolTRUE. $extKeyUse;
   $extKeyUse = pack('C',0x30).DERLength(length($extKeyUse)).$extKeyUse;
-  my $extXKeyUse = $server ? $serverAuth : ($codesign?$codeSigning:$clientAuth);
-  $extXKeyUse = pack('C',0x30).DERLength(length($extXKeyUse)).$extXKeyUse;
-  $extXKeyUse = pack('C',0x04).DERLength(length($extXKeyUse)).$extXKeyUse;
-  $extXKeyUse = $extKeyUsage . $extXKeyUse;
-  $extXKeyUse = pack('C',0x30).DERLength(length($extXKeyUse)).$extXKeyUse;
+  my $extXKeyUse = '';
+  if (!$subca) {
+    $extXKeyUse = $server ? $serverAuth : ($codesign?$codeSigning:$clientAuth);
+    $extXKeyUse = pack('C',0x30).DERLength(length($extXKeyUse)).$extXKeyUse;
+    $extXKeyUse = pack('C',0x04).DERLength(length($extXKeyUse)).$extXKeyUse;
+    $extXKeyUse = $extKeyUsage . $extXKeyUse;
+    $extXKeyUse = pack('C',0x30).DERLength(length($extXKeyUse)).$extXKeyUse;
+  }
   my $extSubjKey = pack('C',0x04).DERLength(length($sshkeyid)).$sshkeyid;
   $extSubjKey = pack('C',0x04).DERLength(length($extSubjKey)).$extSubjKey;
   $extSubjKey = $subjKeyId . $extSubjKey;
@@ -1097,7 +1156,7 @@ sub main
   $extAuthKey = pack('C',0x04).DERLength(length($extAuthKey)).$extAuthKey;
   $extAuthKey = $authKeyId . $extAuthKey;
   $extAuthKey = pack('C',0x30).DERLength(length($extAuthKey)).$extAuthKey;
-  my $exts = $extCAFalse . $extKeyUse . $extXKeyUse . $extSubjKey . $extAuthKey;
+  my $exts = $extCAVal . $extKeyUse . $extXKeyUse . $extSubjKey . $extAuthKey;
   $exts = pack('C',0x30).DERLength(length($exts)).$exts;
   $exts = pack('C',0xA3).DERLength(length($exts)).$exts;
   my $serial;
