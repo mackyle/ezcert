@@ -658,6 +658,7 @@ sub GetCertInfo($)
   # Output is an array of:
   #   version (1, 2, or 3)
   #   serial number (just the serial number data bytes, no header or length)
+  #   issuer name as a DER "Name"
   #   validity start as a DER "Time"
   #   validity end as a DER "Time"
   #   subject name as a DER "Name"
@@ -702,6 +703,7 @@ sub GetCertInfo($)
   return undef if unpack('C',substr($der,0,1)) != 0x30; # Issuer
   ($len, $lenbytes) = ReadDERLength(substr($der,1));
   return undef unless length($der) > 1+$lenbytes+$len;
+  my $issuer = substr($der, 0, 1 + $lenbytes + $len);
   substr($der,0,1+$lenbytes+$len) = '';
   return undef if unpack('C',substr($der,0,1)) != 0x30; # Validity
   ($len, $lenbytes) = ReadDERLength(substr($der,1));
@@ -731,7 +733,7 @@ sub GetCertInfo($)
   return undef unless length($der) >= 1+$lenbytes+$len;
   my $subjkey = substr($der, 0, 1 + $lenbytes + $len);
   substr($der, 0, 1+$lenbytes+$len) = '';
-  return ($ver,$serial,$vst,$vnd,$subj,$subjkey,undef)
+  return ($ver,$serial,$issuer,$vst,$vnd,$subj,$subjkey,undef)
     if !length($der) || $ver < 3;
   $byte = unpack('C',substr($der,0,1));
   if ($byte == 0x81) {
@@ -781,7 +783,7 @@ sub GetCertInfo($)
     $skid = substr($der,1+$lenbytes,$len);
     last;
   }
-  return ($ver,$serial,$vst,$vnd,$subj,$subjkey,$skid)
+  return ($ver,$serial,$issuer,$vst,$vnd,$subj,$subjkey,$skid)
 }
 
 sub BreakLine($$)
@@ -1080,7 +1082,8 @@ sub main
       unless !!($signcert = <READCERT>);
     close(READCERT);
   }
-  my ($cver,$cser,$vst,$vnd,$subj,$subjkey,$subjkeyid) = GetCertInfo($signcert);
+  my ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid)
+    = GetCertInfo($signcert);
   die "Unparseable certificate format in $certfile\n" unless $cver;
   my $dser = $cser;
   substr($dser,0,1) = '' if unpack('C',substr($cser,0,1)) == 0x00;
@@ -1089,6 +1092,7 @@ sub main
     if $verbose;
   print STDERR "  notBefore=",DERTimeStr($vst)||'Invalid Time',
     " notAfter=",DERTimeStr($vnd)||'Invalid Time',"\n" if $verbose;
+  #print STDERR "  issuer=",DERNameStr($issuer),"\n" if $verbose;
   #print STDERR "  name=",DERNameStr($subj),"\n" if $verbose;
   print STDERR "  subj_keyid=", join(":", toupper(
     unpack("H*",$subjkeyid))=~/../g), "\n" if defined($subjkeyid) && $verbose;
@@ -1149,7 +1153,7 @@ sub main
   $extSubjKey = $subjKeyId . $extSubjKey;
   $extSubjKey = pack('C',0x30).DERLength(length($extSubjKey)).$extSubjKey;
   my $extAuthKey = pack('C',0x80).DERLength(length($pubkeyid)).$pubkeyid;
-  my $gen = pack('C',0xA4).DERLength(length($subj)).$subj;
+  my $gen = pack('C',0xA4).DERLength(length($issuer)).$issuer;
   $extAuthKey .= pack('C',0xA1).DERLength(length($gen)).$gen;
   $extAuthKey .= pack('C',0x82).DERLength(length($cser)).$cser;
   $extAuthKey = pack('C',0x30).DERLength(length($extAuthKey)).$extAuthKey;
