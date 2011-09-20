@@ -22,7 +22,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.1.1';
+  *VERSION = \'1.2';
   $VERSIONMSG = "CACreateCertClient version $VERSION\n" .
     "Copyright (C) 2011 Kyle J. McKay.  All rights reserved.\n";
 }
@@ -893,22 +893,28 @@ sub main
   my $termOK = '';
   my $server = '';
   my $codesign = '';
+  my $email = '';
   my $subca = '';
+  my $root = '';
   my $digest = $hasSha2 ? 'sha256' : 'sha1';
   my $digestChoice = '';
   my $debug = 0;
   my $pubx509 = '';
   my $check = '';
   my $commonName = DEROID('2.5.4.3'); # :commonName
+  my $serialNumber = DEROID('2.5.4.5'); # :serialNumber
   my $userId = DEROID('0.9.2342.19200300.100.1.1'); # :userId
+  my $emailAddress = DEROID('1.2.840.113549.1.9.1'); # :emailAddress
   my $basicConstraints = DEROID('2.5.29.19');
   my $keyUsage = DEROID('2.5.29.15');
   my $extKeyUsage = DEROID('2.5.29.37');
   my $serverAuth = DEROID('1.3.6.1.5.5.7.3.1');
   my $clientAuth = DEROID('1.3.6.1.5.5.7.3.2');
   my $codeSigning = DEROID('1.3.6.1.5.5.7.3.3');
+  my $emailProtection = DEROID('1.3.6.1.5.5.7.3.4');
   my $authKeyId = DEROID('2.5.29.35');
   my $subjKeyId = DEROID('2.5.29.14');
+  my $subjAltName = DEROID('2.5.29.17');
   my $boolTRUE = pack('C*',0x01,0x01,0xFF);
   my $boolFALSE = pack('C*',0x01,0x01,0x00);
   my $v3Begin = pack('C',0x17).DERLength(13)."970811000000Z";
@@ -929,7 +935,9 @@ sub main
       "t" => \$termOK,
       "server" => \$server,
       "codesign" => \$codesign,
+      "email" => \$email,
       "subca" => \$subca,
+      "root" => \$root,
       "digest=s" => \$digestChoice,
       "key|k=s" => \$keyfile,
       "cert|c=s" => \$certfile
@@ -952,19 +960,21 @@ sub main
   print STDERR $VERSIONMSG if $verbose;
   my $keytype = 'OpenSSH';
   $keytype = 'pubx509' if $pubx509;
-  die $USAGE if !$keyfile || !$certfile || (!$check && @ARGV != 1);
+  die $USAGE if !$keyfile || (!$root && !$certfile) || (!$check && @ARGV != 1);
   die "Standard input is a tty (which is an unlikely source of a $keytype "
     . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
-    if -t STDIN && !$termOK;
+    if !$root && -t STDIN && !$termOK;
+  die "Name may not be empty\n"
+    unless $check || $ARGV[0] || ($root && $useRandom);
   my $opensshdotpub;
-  {
+  if (!$root) {
     local $/ if $pubx509;
     !!($opensshdotpub = <STDIN>)
       or die "Cannot read $keytype public key from STDIN\n";
   }
   die "Cannot read key file $keyfile\n" if ! -r $keyfile;
-  die "Cannot read certificate file $certfile\n" if ! -r $certfile;
+  die "Cannot read certificate file $certfile\n" if !$root && ! -r $certfile;
   my ($did, $dalg, $dfunc) = GetDigest($digestChoice || $digest);
   print STDERR "default digest: $digest\n" if $debug;
   warn "*** Warning: defaulting to sha1 since sha256 support not available\n"
@@ -975,7 +985,12 @@ sub main
   print STDERR "Using digest $digest\n" if $verbose;
 
   my ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub);
-  if ($pubx509) {
+  if ($root) {
+    # need to set $sshkeyid to $pubkeyid
+    # need to set $opensshpub to $pubkey
+    # but don't have either yet, so do it later
+  }
+  elsif ($pubx509) {
     local (*READKEY, *WRITEKEY);
     my $inform = $opensshdotpub =~ m|^[\t\n\r\x20-\x7E]*$|os ? 'PEM' : 'DER';
     print STDERR "pubx509 -inform $inform\n" if $debug;
@@ -1004,27 +1019,29 @@ sub main
     die "Unsupported OpenSSH public key type ($sshkeybits), must be ssh-rsa\n"
       unless $sshkeyexp;
   }
-  print STDERR "$keytype Public Key Info:\n",
-      "  bits=$sshkeybits pubexp=$sshkeyexp\n" if $verbose;
-  print STDERR "  keyid=",
-    join(":", toupper(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
-  print STDERR "  fingerprint(md5)=",
-    join(":", tolower(unpack("H*",$sfmd5))=~/../g), "\n" if $verbose;
-  print STDERR "  fingerprint(sha1)=",
-    join(":", tolower(unpack("H*",$sfsha1))=~/../g), "\n" if $verbose;
-  print STDERR "  comment=",$sshcmnt||'<none present>',"\n"
-    if $verbose && !$pubx509;
-  die "*** Error: $keytype key has less than 512 bits ($sshkeybits)\n"
-    . "***        You might as well just donate your system to hackers now.\n"
-    if $sshkeybits < 512;
-  die "*** Error: The $keytype key's public exponent is even ($sshkeyexp)!\n"
-    if !($sshkeyexp & 0x01);
-  warn "*** Warning: The $keytype key has less than 2048 bits ($sshkeybits), "
-    . "continuing anyway\n" if !$quiet && $sshkeybits < 2048;
-  die "*** Error: The $keytype public key's exponent of $sshkeyexp is "
-    . "unacceptably weak!\n" if $sshkeyexp < 35; # OpenSSH used 35 until v5.4
-  warn "*** Warning: The $keytype public key's exponent ($sshkeyexp) is weak "
-    . "(< 65537), continuing anyway\n" if !$quiet && $sshkeyexp < 65537;
+  if (!$root) {
+    print STDERR "$keytype Public Key Info:\n",
+        "  bits=$sshkeybits pubexp=$sshkeyexp\n" if $verbose;
+    print STDERR "  keyid=",
+      join(":", toupper(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
+    print STDERR "  fingerprint(md5)=",
+      join(":", tolower(unpack("H*",$sfmd5))=~/../g), "\n" if $verbose;
+    print STDERR "  fingerprint(sha1)=",
+      join(":", tolower(unpack("H*",$sfsha1))=~/../g), "\n" if $verbose;
+    print STDERR "  comment=",$sshcmnt||'<none present>',"\n"
+      if $verbose && !$pubx509;
+    die "*** Error: $keytype key has less than 512 bits ($sshkeybits)\n"
+      . "***        You might as well just donate your system to hackers now.\n"
+      if $sshkeybits < 512;
+    die "*** Error: The $keytype key's public exponent is even ($sshkeyexp)!\n"
+      if !($sshkeyexp & 0x01);
+    warn "*** Warning: The $keytype key has less than 2048 bits ($sshkeybits), "
+      . "continuing anyway\n" if !$quiet && $sshkeybits < 2048;
+    die "*** Error: The $keytype public key's exponent of $sshkeyexp is "
+      . "unacceptably weak!\n" if $sshkeyexp < 35; # OpenSSH used 35 until v5.4
+    warn "*** Warning: The $keytype public key's exponent ($sshkeyexp) is weak "
+      . "(< 65537), continuing anyway\n" if !$quiet && $sshkeyexp < 65537;
+  }
 
   my $inform = -T $keyfile ? 'PEM' : 'DER';
   print STDERR "keyfile -inform $inform\n" if $debug;
@@ -1044,7 +1061,9 @@ sub main
       unless !!($pubkey = <READKEY>);
     close(READKEY);
   }
+  $opensshpub = $pubkey if $root;
   my ($pubkeybits,$pubkeyexp,$pubkeyid,$pfmd5,$pfsha1) = GetKeyInfo($pubkey);
+  $sshkeyid = $pubkeyid if $root;
   die "Unparseable public key format in $keyfile\n" unless $pubkeybits;
   print STDERR "RSA Private Key $keyfile:\n",
     "  bits=$pubkeybits pubexp=$pubkeyexp\n" if $verbose;
@@ -1066,50 +1085,58 @@ sub main
   warn "*** Warning: The private key's public exponent ($pubkeyexp) is weak "
     . "(< 65537), continuing anyway\n" if !$quiet && $pubkeyexp < 65537;
 
-  $inform = -T $certfile ? 'PEM' : 'DER';
-  print STDERR "certfile -inform $inform\n" if $debug;
-  my $signcert;
-  {
-    local *READCERT;
-    #open(my $olderr, ">&STDERR") or die "Cannot dup STDERR: $!\n";
-    #open(STDERR, '>', "/dev/null") or die "Cannot redirect STDERR: $!";
-    open(READCERT, "-|", "openssl", "x509", "-inform", $inform, "-outform",
-        "DER", "-in", $certfile)
-      or die "Cannot read X.509 certificate in $certfile\n";
-    #open(STDERR, ">&", $olderr) or die "Cannot dup \$olderr: $!";
-    local $/;
-    die "Error reading X.509 certificate in $certfile\n"
-      unless !!($signcert = <READCERT>);
-    close(READCERT);
-  }
-  my ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid)
-    = GetCertInfo($signcert);
-  die "Unparseable certificate format in $certfile\n" unless $cver;
-  my $dser = $cser;
-  substr($dser,0,1) = '' if unpack('C',substr($cser,0,1)) == 0x00;
-  print STDERR "X.509 Certificate $certfile:\n",
-    "  ver=v$cver serial=", join(":", tolower(unpack("H*",$dser))=~/../g), "\n"
-    if $verbose;
-  print STDERR "  notBefore=",DERTimeStr($vst)||'Invalid Time',
-    " notAfter=",DERTimeStr($vnd)||'Invalid Time',"\n" if $verbose;
-  #print STDERR "  issuer=",DERNameStr($issuer),"\n" if $verbose;
-  #print STDERR "  name=",DERNameStr($subj),"\n" if $verbose;
-  print STDERR "  subj_keyid=", join(":", toupper(
-    unpack("H*",$subjkeyid))=~/../g), "\n" if defined($subjkeyid) && $verbose;
-  die "The private key is not the correct one for the certificate:\n".
-    "  certificate: $certfile\n".
-    "  private key: $keyfile\n" unless $subjkey eq $pubkey;
-  if (!defined($subjkeyid)) {
-    warn "*** Warning: The certificate has no subjectKeyIdentifier, "
-      . "using RFC 5280 (1)\n";
+  my ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid);
+  if ($root) {
+    $vst = $v3Begin;
+    $vnd = $noExpiry;
     $subjkeyid = $pubkeyid;
   }
-  warn "*** Warning: subjectKeyIdentifier non-standard, continuing anyway\n"
-    unless $subjkeyid eq $pubkeyid;
-  die "*** Error: The $keytype public key is the same as the certificate's "
-    . "public key.\n"
-    . "***        They must be different for security reasons.\n"
-    if $pubkey eq $opensshpub;
+  else {
+    $inform = -T $certfile ? 'PEM' : 'DER';
+    print STDERR "certfile -inform $inform\n" if $debug;
+    my $signcert;
+    {
+      local *READCERT;
+      #open(my $olderr, ">&STDERR") or die "Cannot dup STDERR: $!\n";
+      #open(STDERR, '>', "/dev/null") or die "Cannot redirect STDERR: $!";
+      open(READCERT, "-|", "openssl", "x509", "-inform", $inform, "-outform",
+          "DER", "-in", $certfile)
+        or die "Cannot read X.509 certificate in $certfile\n";
+      #open(STDERR, ">&", $olderr) or die "Cannot dup \$olderr: $!";
+      local $/;
+      die "Error reading X.509 certificate in $certfile\n"
+        unless !!($signcert = <READCERT>);
+      close(READCERT);
+    }
+    ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid)
+      = GetCertInfo($signcert);
+    die "Unparseable certificate format in $certfile\n" unless $cver;
+    my $dser = $cser;
+    substr($dser,0,1) = '' if unpack('C',substr($cser,0,1)) == 0x00;
+    print STDERR "X.509 Certificate $certfile:\n",
+      "  ver=v$cver serial=", join(":", tolower(unpack("H*",$dser))=~/../g),"\n"
+      if $verbose;
+    print STDERR "  notBefore=",DERTimeStr($vst)||'Invalid Time',
+      " notAfter=",DERTimeStr($vnd)||'Invalid Time',"\n" if $verbose;
+    #print STDERR "  issuer=",DERNameStr($issuer),"\n" if $verbose;
+    #print STDERR "  name=",DERNameStr($subj),"\n" if $verbose;
+    print STDERR "  subj_keyid=", join(":", toupper(
+      unpack("H*",$subjkeyid))=~/../g), "\n" if defined($subjkeyid) && $verbose;
+    die "The private key is not the correct one for the certificate:\n".
+      "  certificate: $certfile\n".
+      "  private key: $keyfile\n" unless $subjkey eq $pubkey;
+    if (!defined($subjkeyid)) {
+      warn "*** Warning: The certificate has no subjectKeyIdentifier, "
+        . "using RFC 5280 (1)\n";
+      $subjkeyid = $pubkeyid;
+    }
+    warn "*** Warning: subjectKeyIdentifier non-standard, continuing anyway\n"
+      unless $subjkeyid eq $pubkeyid;
+    die "*** Error: The $keytype public key is the same as the certificate's "
+      . "public key.\n"
+      . "***        They must be different for security reasons.\n"
+      if $pubkey eq $opensshpub;
+  }
   return 0 if $check;
 
   my $version = pack('CCCCC', 0xA0, 0x03, 0x02, 0x01, 0x02); # v3
@@ -1117,32 +1144,46 @@ sub main
   my $sigAlg = $dalg . pack('CC',0x05,0x00);
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
   my $name = MakeUTF8($ARGV[0]);
-  $name = pack('C',0x0C).DERLength(length($name)).$name; # utf8String
-  $name = (($server || $codesign || $subca) ? $commonName : $userId) . $name;
+  $name = pack('C',$email?0x16:0x0C).DERLength(length($name)).$name;
+  $name = (($server || $codesign || $subca || $root) ? $commonName :
+    ($email ? $emailAddress : $userId)) . $name;
   $name = pack('C',0x30).DERLength(length($name)).$name;
   $name = pack('C',0x31).DERLength(length($name)).$name;
+  if ($root && $useRandom) {
+    my $serialRDN = join(":", tolower(unpack("H*",$randval))=~/../g);
+    $serialRDN = pack('C',0x13).DERLength(length($serialRDN)).$serialRDN;
+    $serialRDN = $serialNumber . $serialRDN;
+    $serialRDN = pack('C',0x30).DERLength(length($serialRDN)).$serialRDN;
+    $serialRDN = pack('C',0x31).DERLength(length($serialRDN)).$serialRDN;
+    $name = $serialRDN . ($ARGV[0] ? $name : '');
+  }
   $name = pack('C',0x30).DERLength(length($name)).$name;
+  $subj = $name if $root;
   my $validity = ($useNow ? DERTime(time()) : $vst).$vnd;
   $validity = pack('C',0x30).DERLength(length($validity)).$validity;
   my $extCAVal;
-  if ($subca) {
+  if ($subca || $root) {
     $extCAVal = pack('C',0x30).DERLength(length($boolTRUE)).$boolTRUE;
     $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
     $extCAVal = $basicConstraints . $boolTRUE . $extCAVal;
   }
   else {
+    # false is the default value, but just to make SURE it's never treated
+    # as a certificate authority, we include this
     $extCAVal = pack('C',0x30).DERLength(length($boolFALSE)).$boolFALSE;
     $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
     $extCAVal = $basicConstraints . $extCAVal;
   }
   $extCAVal = pack('C',0x30).DERLength(length($extCAVal)).$extCAVal;
-  my $extKeyBits = $subca ? '0106' : ($server ? '05A0' : '0780');
+  my $extKeyBits = ($subca || $root)  ? '0106' :
+    ($server ? '05A0' : ($email ? '06C0' : '0780'));
   my $extKeyUse = pack('H*', '04040302'.$extKeyBits);
   $extKeyUse = $keyUsage . $boolTRUE. $extKeyUse;
   $extKeyUse = pack('C',0x30).DERLength(length($extKeyUse)).$extKeyUse;
   my $extXKeyUse = '';
-  if (!$subca) {
-    $extXKeyUse = $server ? $serverAuth : ($codesign?$codeSigning:$clientAuth);
+  if (!$subca && !$root) {
+    $extXKeyUse = $server ? $serverAuth :
+      ($codesign ? $codeSigning : ($email ? $emailProtection : $clientAuth));
     $extXKeyUse = pack('C',0x30).DERLength(length($extXKeyUse)).$extXKeyUse;
     $extXKeyUse = pack('C',0x04).DERLength(length($extXKeyUse)).$extXKeyUse;
     $extXKeyUse = $extKeyUsage . $extXKeyUse;
@@ -1153,14 +1194,25 @@ sub main
   $extSubjKey = $subjKeyId . $extSubjKey;
   $extSubjKey = pack('C',0x30).DERLength(length($extSubjKey)).$extSubjKey;
   my $extAuthKey = pack('C',0x80).DERLength(length($pubkeyid)).$pubkeyid;
-  my $gen = pack('C',0xA4).DERLength(length($issuer)).$issuer;
-  $extAuthKey .= pack('C',0xA1).DERLength(length($gen)).$gen;
-  $extAuthKey .= pack('C',0x82).DERLength(length($cser)).$cser;
+  if (!$root) {
+    my $gen = pack('C',0xA4).DERLength(length($issuer)).$issuer;
+    $extAuthKey .= pack('C',0xA1).DERLength(length($gen)).$gen;
+    $extAuthKey .= pack('C',0x82).DERLength(length($cser)).$cser;
+  }
   $extAuthKey = pack('C',0x30).DERLength(length($extAuthKey)).$extAuthKey;
   $extAuthKey = pack('C',0x04).DERLength(length($extAuthKey)).$extAuthKey;
   $extAuthKey = $authKeyId . $extAuthKey;
   $extAuthKey = pack('C',0x30).DERLength(length($extAuthKey)).$extAuthKey;
   my $exts = $extCAVal . $extKeyUse . $extXKeyUse . $extSubjKey . $extAuthKey;
+  if ($email) {
+    my $extSubjAlt = MakeUTF8($ARGV[0]);
+    $extSubjAlt = pack('C',0x81).DERLength(length($extSubjAlt)).$extSubjAlt;
+    $extSubjAlt = pack('C',0x30).DERLength(length($extSubjAlt)).$extSubjAlt;
+    $extSubjAlt = pack('C',0x04).DERLength(length($extSubjAlt)).$extSubjAlt;
+    $extSubjAlt = $subjAltName . $extSubjAlt; # not crit unless empty DN
+    $extSubjAlt = pack('C',0x30).DERLength(length($extSubjAlt)).$extSubjAlt;
+    $exts .= $extSubjAlt;
+  }
   $exts = pack('C',0x30).DERLength(length($exts)).$exts;
   $exts = pack('C',0xA3).DERLength(length($exts)).$exts;
   my $serial;
