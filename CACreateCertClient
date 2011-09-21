@@ -22,7 +22,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2';
+  *VERSION = \'1.2.1';
   $VERSIONMSG = "CACreateCertClient version $VERSION\n" .
     "Copyright (C) 2011 Kyle J. McKay.  All rights reserved.\n";
 }
@@ -1164,19 +1164,16 @@ sub main
   my $extCAVal;
   if ($subca || $root) {
     $extCAVal = pack('C',0x30).DERLength(length($boolTRUE)).$boolTRUE;
-    $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
-    $extCAVal = $basicConstraints . $boolTRUE . $extCAVal;
   }
   else {
-    # false is the default value, but just to make SURE it's never treated
-    # as a certificate authority, we include this
-    $extCAVal = pack('C',0x30).DERLength(length($boolFALSE)).$boolFALSE;
-    $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
-    $extCAVal = $basicConstraints . $extCAVal;
+    #$extCAVal = pack('C',0x30).DERLength(length($boolFALSE)).$boolFALSE;
+    $extCAVal = pack('C',0x30).DERLength(0); # do not include DEFAULT value
   }
+  $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
+  $extCAVal = $basicConstraints . $boolTRUE . $extCAVal;
   $extCAVal = pack('C',0x30).DERLength(length($extCAVal)).$extCAVal;
   my $extKeyBits = ($subca || $root)  ? '0106' :
-    ($server ? '05A0' : ($email ? '06C0' : '0780'));
+    ($server ? '05A0' : ($email ? '05E0' : '0780'));
   my $extKeyUse = pack('H*', '04040302'.$extKeyBits);
   $extKeyUse = $keyUsage . $boolTRUE. $extKeyUse;
   $extKeyUse = pack('C',0x30).DERLength(length($extKeyUse)).$extKeyUse;
@@ -1186,7 +1183,7 @@ sub main
       ($codesign ? $codeSigning : ($email ? $emailProtection : $clientAuth));
     $extXKeyUse = pack('C',0x30).DERLength(length($extXKeyUse)).$extXKeyUse;
     $extXKeyUse = pack('C',0x04).DERLength(length($extXKeyUse)).$extXKeyUse;
-    $extXKeyUse = $extKeyUsage . $extXKeyUse;
+    $extXKeyUse = $extKeyUsage . $boolTRUE . $extXKeyUse;
     $extXKeyUse = pack('C',0x30).DERLength(length($extXKeyUse)).$extXKeyUse;
   }
   my $extSubjKey = pack('C',0x04).DERLength(length($sshkeyid)).$sshkeyid;
