@@ -1108,8 +1108,8 @@ sub main
         unless !!($signcert = <READCERT>);
       close(READCERT);
     }
-    ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid)
-      = GetCertInfo($signcert);
+    ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid) =
+      GetCertInfo($signcert);
     die "Unparseable certificate format in $certfile\n" unless $cver;
     my $dser = $cser;
     substr($dser,0,1) = '' if unpack('C',substr($cser,0,1)) == 0x00;
