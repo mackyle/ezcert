@@ -907,6 +907,8 @@ sub main
   my $email = '';
   my $subca = '';
   my $root = '';
+  my $rootauth = '';
+  my $authext = '';
   my $digest = $hasSha2 ? 'sha256' : 'sha1';
   my $digestChoice = '';
   my $debug = 0;
@@ -953,6 +955,8 @@ sub main
       "client" => \$client,
       "subca" => \$subca,
       "root" => \$root,
+      "rootauth" => \$rootauth,
+      "authext" => \$authext,
       "digest=s" => \$digestChoice,
       "key|k=s" => \$keyfile,
       "cert|c=s" => \$certfile,
@@ -1216,11 +1220,13 @@ sub main
   $extSubjKey = $subjKeyId . $extSubjKey;
   $extSubjKey = pack('C',0x30).DERLength(length($extSubjKey)).$extSubjKey;
   my $extAuthKey = '';
-  if (!$root) {
+  if (!$root || $rootauth) {
     $extAuthKey = pack('C',0x80).DERLength(length($pubkeyid)).$pubkeyid;
-    #my $gen = pack('C',0xA4).DERLength(length($issuer)).$issuer;
-    #$extAuthKey .= pack('C',0xA1).DERLength(length($gen)).$gen;
-    #$extAuthKey .= pack('C',0x82).DERLength(length($cser)).$cser;
+    if (!$root && $authext) {
+      my $gen = pack('C',0xA4).DERLength(length($issuer)).$issuer;
+      $extAuthKey .= pack('C',0xA1).DERLength(length($gen)).$gen;
+      $extAuthKey .= pack('C',0x82).DERLength(length($cser)).$cser;
+    }
     $extAuthKey = pack('C',0x30).DERLength(length($extAuthKey)).$extAuthKey;
     $extAuthKey = pack('C',0x04).DERLength(length($extAuthKey)).$extAuthKey;
     $extAuthKey = $authKeyId . $extAuthKey;
