@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 # CACreateCertClient - Create a Client Authentication Certificate
-# Copyright (C) 2011 Kyle J. McKay.  All rights reserved.
+# Copyright (C) 2011,2012 Kyle J. McKay.  All rights reserved.
 
 exit(&main());
 
@@ -96,9 +96,9 @@ NAME
 
 DESCRIPTION
        CACreateCertClient creates a new client certificate suitable for a
-       client to use to authenticate itself a server using signing_cert as the
-       client authentication authority.  Typically the "username" provided will
-       be a *nix user login (all lowercase) on the server to which clients
+       client to use to authenticate itself to a server using signing_cert as
+       the client authentication authority.  Typically the "username" provided
+       will be a *nix user login (all lowercase) on the server to which clients
        connect to.  However, it can be any string desired as the created
        certificate will be used for authentication and the "username" value may
        not actually be tied to any real accounts on the server to which the
