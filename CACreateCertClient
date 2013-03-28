@@ -22,7 +22,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.2';
+  *VERSION = \'1.2.3';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n";
 }
@@ -994,6 +994,28 @@ sub main
     local $/ if $pubx509;
     !!($opensshdotpub = <STDIN>)
       or die "Cannot read $keytype public key from STDIN\n";
+    if (!$pubx509) {
+      my $auto509 = 0;
+      if ($opensshdotpub =~ /^----[- ]BEGIN PUBLIC KEY[- ]----/) {
+        $auto509 = 1;
+      }
+      else {
+        my $input = $opensshdotpub;
+        $input =~ s/((?:\r\n|\n|\r).*)$//os;
+        my @fields = split(' ', $input, 3);
+        if (@fields < 2 || length($fields[1]) < 16 || $fields[1] !~ m|^[0-9A-Za-z+/=]+$|) {
+          $auto509 = 1;
+        }
+      }
+      if ($auto509) {
+        $pubx509 = 1;
+        $keytype = 'pubx509';
+        print STDERR "auto detected --pubx509 option\n" if $debug;
+        local $/;
+        my $extra = <STDIN>;
+        $opensshdotpub .= $extra if $extra;
+      }
+    }
   }
   die "Cannot read key file $keyfile\n" if ! -r $keyfile;
   die "Cannot read certificate file $certfile\n" if !$root && ! -r $certfile;
