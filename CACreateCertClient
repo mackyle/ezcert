@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
-# CACreateCertClient - Create a Client Authentication Certificate
-# Copyright (C) 2011,2012 Kyle J. McKay.  All rights reserved.
+# CACreateCert - Create various types of certificates
+# Copyright (c) 2011,2012,2013 Kyle J. McKay.  All rights reserved.
 
 exit(&main());
 
@@ -22,9 +22,9 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.1';
-  $VERSIONMSG = "CACreateCertClient version $VERSION\n" .
-    "Copyright (C) 2011 Kyle J. McKay.  All rights reserved.\n";
+  *VERSION = \'1.2.2';
+  $VERSIONMSG = "CACreateCert version $VERSION\n" .
+    "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n";
 }
 
 BEGIN {
@@ -749,13 +749,13 @@ sub GetCertInfo($)
     ($len, $lenbytes) = ReadDERLength(substr($der,1));
     return undef unless length($der) >= 1+$lenbytes+$len;
     substr($der,0,1+$lenbytes+$len) = '';
-    $byte = unpack(substr($der,0,1));
+    $byte = unpack('C',substr($der,0,1));
   }
   if ($byte == 0x82) {
     ($len, $lenbytes) = ReadDERLength(substr($der,1));
     return undef unless length($der) >= 1+$lenbytes+$len;
     substr($der,0,1+$lenbytes+$len) = '';
-    $byte = unpack(substr($der,0,1));
+    $byte = unpack('C',substr($der,0,1));
   }
   return undef if length($der) && $byte != 0xA3; # exts tag
   ($len, $lenbytes) = ReadDERLength(substr($der,1));
