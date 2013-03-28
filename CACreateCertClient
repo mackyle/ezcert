@@ -22,7 +22,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.3';
+  *VERSION = \'1.2.4';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n";
 }
@@ -1189,7 +1189,7 @@ sub main
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
   my $name = MakeUTF8($ARGV[0]);
   $name = pack('C',$email?0x16:0x0C).DERLength(length($name)).$name;
-  $name = (($server || $codesign || $subca || $root) ? $commonName :
+  $name = (($server || $codesign || $subca || $root || $applecodesign) ? $commonName :
     ($email ? $emailAddress : $userId)) . $name;
   $name = pack('C',0x30).DERLength(length($name)).$name;
   $name = pack('C',0x31).DERLength(length($name)).$name;
