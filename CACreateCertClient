@@ -22,7 +22,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.4';
+  *VERSION = \'1.2.5';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n";
 }
@@ -84,59 +84,213 @@ BEGIN {
 
 BEGIN {
   $USAGE = <<USAGE;
-Usage: CACreateCertClient [-h] [--digest=sha1|sha224|sha256|sha384|sha512]
-         [--check] [--pubx509] --cert signing_cert --key key_file "username"
-         < client_openssh_key.pub > out_cert.pem
+Usage: CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
+         [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
+         [--root | --subca | --server | --codesign | --applecodesign | --email]
+         [--client] [--rootauth] [--authext] [--pathlen n] [--random]
+         --key priv_key_file [--cert signing_cert] "name string"
+         [< pub_key_file] > out_cert.pem
 USAGE
   $HELP = <<HELP;
 NAME
-       CACreateCertClient [-h] [--digest=sha1|sha224|sha256|sha384|sha512]
-         [--check] [--pubx509] --cert signing_cert --key key_file "username"
-         < client_openssh_key.pub > out_cert.pem
+       CACreateCert -- create X.509 certificate
+
+SYNOPSIS
+       CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
+         [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
+         [--root | --subca | --server | --codesign | --applecodesign | --email]
+         [--client] [--rootauth] [--authext] [--pathlen n] [--random]
+         --key priv_key_file [--cert signing_cert] "name string"
+         [< pub_key_file] > out_cert.pem
+       CACreateCert --root [--random] --key priv_key_file "name string" > ca.pem
+       CACreateCert --key priv_key_file --cert signing_cert "name string"
+         < pub_key_file > out_cert.pem
 
 DESCRIPTION
-       CACreateCertClient creates a new client certificate suitable for a
-       client to use to authenticate itself to a server using signing_cert as
-       the client authentication authority.  Typically the "username" provided
-       will be a *nix user login (all lowercase) on the server to which clients
-       connect to.  However, it can be any string desired as the created
-       certificate will be used for authentication and the "username" value may
-       not actually be tied to any real accounts on the server to which the
-       client connects and authenticates to.
+       CACreateCert creates a new certificate.  Various certificate types are
+       supported including root CA certificates, sub CA certificates, server
+       certificates, code signing certificates, email certificates and client
+       certificates.
 
-       The "username" value is expected to be either Latin-1 or UTF-8.
+       When creating a certificate, the only private key required is that of
+       the signer.  This means that, for example, a new client authentication
+       certifcate can be created given only the public key of the client and
+       the private key of the signing certificate.
 
-       The client's RSA public key in OpenSSH .pub format must be provided on
-       standard input (i.e. redirect standard input to ~/.ssh/id_rsa.pub).
-       Note that the client's private RSA key IS NOT REQUIRED.  In particular,
-       the key_file provided is the signing_cert's private key, NOT the
-       client's.  This allows a server to create client authentication
-       certificates without requiring access to any of the client's private
-       data (such as its private key).  The resulting certificate that is
-       created also need not be protected as it cannot be used without the
-       client's private key (which presumably the client protects access to).
+       The public key for the certificate being created may be provided in
+       either OpenSSH .pub format or X.509 public key format.  The
+       "openssl rsa -pubout" or "openssl x509 -noout -pubkey" commands can be
+       used to produce an X.509 format public key from either an RSA private key
+       or an X.509 certificate respectively.  Note that only OpenSSH RSA public
+       keys in protocol format 2 are supported (they start with "ssh-rsa ").
 
-       If --pubx509 is used then the client's RSA public key should be provided
-       on standard input in OpenSSL X.509 public key format (i.e. the output of
-       the "openssl rsa -pubout" or "openssl x509 -noout -pubkey" commands)
-       instead of in OpenSSH format.  This can be more convenient if the
-       client's public key is readily available from a certificate (where it
-       can be easily extracted into OpenSSL X.509 public key format) but is not
-       otherwise readily available in OpenSSH public key format.
+       When creating a root certificate no public key is required.
 
-       The key_file must be an RSA private key file in PEM format and
-       furthermore it must not have a password (both openssl genrsa and
+       The "name string" value given must be appropriate for the type of
+       certificate being created.  For a client authentication certificate it
+       will typically be a *nix user login (all lowercase) on the server to
+       which clients connect to.  For an email certificate it will typically
+       be the full email address.  For a server it will generally be the
+       canonical DNS name of the server.
+
+       No validation is performed on the "name string" value except that it
+       must not be the empty string.  It may be provided in either Latin-1 or
+       UTF-8.
+
+       The priv_key_file must be an RSA private key file in PEM or DER format
+       and furthermore it must not have a password (both openssl genrsa and
        ssh-keygen -t rsa can create these kinds of RSA private key files).  If
        a host is running an OpenSSH sshd daemon, then it probably already has a
        suitable host private RSA key in either /etc/ssh/ssh_host_rsa_key or
        /etc/ssh_host_rsa_key that can be used if desired.
 
-       The signing_cert must be an X.509 certificate that uses key_file as its
-       private key.  It may be in either PEM or DER format.  The created client
-       authentication certificate will be signed by the signing_cert.  The
-       CACreateClientRoot utility can be used to create a suitable signing_cert
-       certificate authority certificate from the key_file if desired.
+       The signing_cert must be an X.509 certificate that uses priv_key_file as
+       its private key.  It may be in either PEM or DER format.  The created
+       certificate will be signed by the signing_cert.  The CACreateCert utility
+       can be used to create a suitable signing_cert certificate authority
+       certificate from the priv_key_file if desired by using the --root option.
 
+       When creating a root certificate no signing_cert is required.
+
+       On success the new certificate is written in PEM format to standard
+       output.  (All error/information messages are written to standard error.)
+
+       Note that certificates created by CACreateCert are deterministic (i.e.
+       the bytewise identical certificate will be output) given the identical
+       input arguments only so long as neither the --random nor --now options
+       are used.
+
+       Also note that the certificates created by this utility do not expire.
+
+OPTIONS
+       -h/--help
+              Show this help
+
+       -V/--version
+              Show the CACreateCert version
+
+       -v/--verbose
+              Produce extra informational messages to standard error.
+              Suppresses --quiet.
+
+       --debug
+              Show debugging information.  Automatically enables --verbose.
+              Suppresses --quiet.
+
+       --quiet
+              Suppress all messages except errors.  Ignored if --debug or
+              --verbose given.
+
+       --check
+              Perform all normal validation checks (except for a non-empty
+              "name string") but do not actually produce a certificate.
+              Automatically enables --verbose.
+
+       --now
+              Normally the validity not before date will be set to the signing
+              certificate's not before date or the approval date of the X.509
+              v3 standard (root certificates).  Using this option causes the
+              not before validity date of the generated certificate to be set
+              to the current time.  Use of this option will preclude production
+              of byte-exact matching output certificates for the same input
+              arguments.
+
+       --pubx509/--pubX509
+              Force the public key read from standard input to be interpreted
+              as an X.509 format public key.  Normally this should be
+              automatically detected and this option should not be needed.
+              This option is ignored if --root is given.
+
+       -t
+              Allow reading the public key from standard input when standard
+              input is a tty.  In most cases attempting to read the public key
+              from standard input that is a tty indicates that the public key
+              was accidentally omitted.  If that is not the case, the -t option
+              must be given to allow reading the public key from standard input
+              when standard input is a tty.
+
+       --digest name
+              Select the digest to use in the generated certificate.  Must be
+              one of sha1, sha224, sha256, sha384 or sha512.  By default sha256
+              will be used if available otherwise sha1 will be used (and a
+              warning issued).  All systems support sha1 digest certificates,
+              but sha1 should really not be used anymore (see NIST
+              recommendation SP 800-131A).  OpenSSL starting with version 0.9.8
+              (released 2005-07-05) supports the SHA-2 family of hash functions
+              (sha224, sha256, sha384 and sha512) which should be used instead
+              of sha1.  Note that either Digest::SHA or Digest::SHA::PurePerl
+              must be available to use sha224, sha256, sha384 or sha512.
+
+       --root
+       --subca
+       --server
+       --codesign
+       --applecodesign
+       --email
+       --client
+              Select the type of certificate to generate.  If --root is given
+              then a root certificate will be created and any --cert option will
+              be ignored as well as standard input.  If none of these options is
+              given then --client will be assumed.  Both --root and --subca
+              generate certificate authority certificates (CA:TRUE).
+              Specifying any of --root, --subca, --server, --codesign or
+              --applecodesign will cause the "name string" to be embedded as
+              a commonName (CN).  Otherwise if --email is specified
+              "name string" will be embedded as an emailAddress (and a subject
+              alternative name email type).  Finally if none of those apply then
+              "name string" will be embedded as a userId (UID) instead
+              (client certificates).  The certificate's key usage bits will be
+              set to one of four values.  --root or --subca select the first,
+              --server selects the second, --email selects the third otherwise
+              the fourth is used.  If any of --server, --client (explicit or
+              implied), --codesign, --email or --applecodesign are given then
+              extended key usage items will be included (up to five -- one for
+              each option given).
+
+       --pathlen n
+              The --pathlen option will be ignored unless --subca is given in
+              which case the X509v3 Basic Constraints will include the
+              specified pathlen value.
+
+       --rootauth
+              Ignored unless --root given.  Normally --root certificates do not
+              include an X509v3 Authority Key Identifier.  If this option is
+              given then they will (with only a keyid value).
+
+       --authext
+              Ignored if --root given.  Normally non --root certificates include
+              an X509v3 Authority Key Identifier section with only a keyid
+              value.  If this option is given, then the name and serial number
+              will also be included.
+
+       --random
+              Ignored unless --root given.  When generating a --root certificate
+              normally only the "name string" value is embedded (as the CN
+              attribute).  If this option is given, a random serialNumber will
+              be generated and the issuer name will be the serialNumber followed
+              by the CN.  If this option is given, the "name string" may be set
+              to the empty string (it must be explicit, e.g. "") in which case
+              the issuer name will be just the random serialNumber.  Use of this
+              option will preclude production of byte-exact matching output
+              certificates for the same input arguments.
+
+       --key priv_key_file
+              The RSA private key in either PEM or DER format.  This option
+              is always required.
+
+       --cert signing_cert
+              Ignored if --root is given.  The signing X.509 certificate in
+              either PEM or DER format.  The public key embedded in signing_cert
+              must match the one in the priv_key_file or an error will occur.
+
+       < pub_key_file
+              Ignored if --root is given.  The public key for the certificate
+              to be created.  Must be different than the public key contained in
+              priv_key_file.  May be an OpenSSH protocol 2 format RSA public key
+              or an X.509 format public key (in either PEM or DER format).  See
+              also the --pubx509 option.
+
+NOTES
        All systems support sha1 digest certificates, but sha1 should really not
        be used anymore (NIST recommendation SP 800-131A).  OpenSSL starting
        with versions 0.9.8 (released 2005-07-05) supports the SHA-2 family of
@@ -152,20 +306,8 @@ DESCRIPTION
        Note that NIST SP 800-78-3 requires RSA public key exponents to be
        greater than or equal to 65537.  OpenSSH version 5.4 and later generate
        RSA keys with a public exponent of 65537 otherwise openssl genrsa can
-       be used together with ssh-keygen -y to create a suitable OpenSSH key.
-
-       There is a seldom-used option not shown in the usage example above.
-       The --now option can be given to set the validity not before date to the
-       current time rather than the not before time from the signing
-       certificate.  This option will cause the actual certificate data output
-       by CACreateCertCilent to differ each time it's run.  If this option is
-       not used, then for any given pair of signing_cert and "username",
-       CACreateCertClient will always output a bytewise-identical certificate
-       which means that only the signing_cert, its RSA private key and the
-       username is needed to recreate the certificate at any time.
-
-       With the --check option, a new certificate is not output, but all the
-       validity checks are still run.
+       be used together with ssh-keygen -y to create a suitable OpenSSH key that
+       uses an exponent of 65537 instead of 35.
 
 TIPS
        Display the currently available version of OpenSSL with:
