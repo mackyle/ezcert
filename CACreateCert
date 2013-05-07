@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.6';
+  *VERSION = \'1.2.7';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -574,13 +574,15 @@ sub RandomID(;$)
   # return 20 random bytes except that the first byte has its high bit clear
   my $suppress = shift || 0;
   print STDERR "Generating serial number, please wait...\n" unless $suppress;
-  open(RANDIN, "<", "/dev/random")
-    or die "Cannot open /dev/random for input\n";
+  my $randfile = "/dev/random";
+  $randfile = "/dev/urandom" if -e "/dev/urandom";
+  open(RANDIN, "<", $randfile)
+    or die "Cannot open $randfile for input\n";
   my $result = '';
   for (my $cnt = 0; $cnt < 20; ++$cnt) {
     my $byte;
     sysread(RANDIN, $byte, 1)
-      or die "Cannot read from /dev/random\n";
+      or die "Cannot read from $randfile\n";
     if (!$cnt) {
       my $val = unpack('C', $byte);
       $val &= 0x7F;
