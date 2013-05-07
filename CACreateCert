@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.5';
+  *VERSION = \'1.2.6';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n";
 }
@@ -98,11 +98,11 @@ BEGIN {
 BEGIN {
   $USAGE = <<USAGE;
 Usage: CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
-         [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
-         [--root | --subca | --server | --codesign | --applecodesign | --email]
-         [--client] [--rootauth] [--authext] [--pathlen n] [--random]
-         --key priv_key_file [--cert signing_cert] "name string"
-         [< pub_key_file] > out_cert.pem
+        [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
+        [--root | --subca | --server | --codesign | --applecodesign | --email]
+        [--client] [--rootauth] [--authext] [--pathlen n] [--random|--no-random]
+        --key priv_key_file [--cert signing_cert] "name string"
+        [< pub_key_file] > out_cert.pem
 USAGE
   $HELP = <<HELP;
 NAME
@@ -110,14 +110,14 @@ NAME
 
 SYNOPSIS
        CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
-         [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
-         [--root | --subca | --server | --codesign | --applecodesign | --email]
-         [--client] [--rootauth] [--authext] [--pathlen n] [--random]
-         --key priv_key_file [--cert signing_cert] "name string"
-         [< pub_key_file] > out_cert.pem
+        [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
+        [--root | --subca | --server | --codesign | --applecodesign | --email]
+        [--client] [--rootauth] [--authext] [--pathlen n] [--random|--no-random]
+        --key priv_key_file [--cert signing_cert] "name string"
+        [< pub_key_file] > out_cert.pem
        CACreateCert --root [--random] --key priv_key_file "name string" > ca.pem
        CACreateCert --key priv_key_file --cert signing_cert "name string"
-         < pub_key_file > out_cert.pem
+        < pub_key_file > out_cert.pem
 
 DESCRIPTION
        CACreateCert creates a new certificate.  Various certificate types are
@@ -285,7 +285,12 @@ OPTIONS
               to the empty string (it must be explicit, e.g. "") in which case
               the issuer name will be just the random serialNumber.  Use of this
               option will preclude production of byte-exact matching output
-              certificates for the same input arguments.
+              certificates for the same input arguments.  This is now the
+              default when --root is given.
+
+       --no-random
+              Ignored unless --root given.  Turns off the default --random
+              option that is normally enabled by default when --root is given.
 
        --key priv_key_file
               The RSA private key in either PEM or DER format.  This option
@@ -1054,6 +1059,7 @@ sub main
   my $certfile = '';
   my $useNow = '';
   my $useRandom = '';
+  my $useNoRandom = '';
   my $termOK = '';
   my $server = '';
   my $codesign = '';
@@ -1102,6 +1108,7 @@ sub main
       "check" => \$check,
       "now" => \$useNow,
       "random" => \$useRandom,
+      "no-random" => \$useNoRandom,
       "t" => \$termOK,
       "server" => \$server,
       "codesign" => \$codesign,
@@ -1137,11 +1144,13 @@ sub main
   print STDERR $VERSIONMSG if $verbose;
   my $keytype = 'OpenSSH';
   $keytype = 'pubx509' if $pubx509;
+  die $USAGE if $root && $useRandom && $useNoRandom;
   die $USAGE if !$keyfile || (!$root && !$certfile) || (!$check && @ARGV != 1);
   die "Standard input is a tty (which is an unlikely source of a $keytype "
     . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
     if !$root && -t STDIN && !$termOK;
+  $useRandom = 1 if $root && !$useNoRandom;
   die "Name may not be empty\n"
     unless $check || $ARGV[0] || ($root && $useRandom);
   my $opensshdotpub;
