@@ -37,7 +37,11 @@ my $hasSha2;
 BEGIN {
   *VERSION = \'1.2.6';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
-    "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n";
+    "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
+    "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
+    "http://gnu.org/licenses/agpl.html\n" .
+    "This is free software: you are free to change and redistribute it.\n" .
+    "There is NO WARRANTY, to the extent permitted by law.\n";
 }
 
 BEGIN {
