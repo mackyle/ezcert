@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<!--
+CACreateCert Examples Page
+Copyright (C) 2013 Kyle J. McKay (mackyle a_t g_ma_il d_o_t _co_m)
+All rights reserved
+
+This file is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This file is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this file.  If not, see <http://www.gnu.org/licenses/>.
+-->
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+	<meta charset='utf-8' />
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+	<title>CACreateCert Examples</title>
+	<style type="text/css">
+
+    body {
+      margin-top: 1.0em;
+      /* background-color: #f8f8f8; */
+      background-color: white;
+      font-family: Times, "Times New Roman", serif;
+      color: black;
+    }
+    #container {
+      margin: 0 auto;
+      background-color: white;
+      max-width: 90ex;
+      position: relative;
+    }
+    @media screen {
+      .last { margin-bottom: -1em; }
+      .aftermargin {
+        position: absolute;
+        height: 100%;
+        width: 1px;
+      }
+    }
+    h1 { font-size: 3.0em; color: black; margin-bottom: 0.1em; }
+    h1 .small { font-size: 0.4em; }
+    h1 a { text-decoration: none; }
+    h2 { font-size: 1.5em; color: black; }
+    h3 { color: black; }
+    p.note:before, p.important:before, h1, h2, h3, th, .cert { font-family: Helvetica, Arial, FreeSans, sans-serif; font-weight: normal; }
+    a { color: black; }
+    .description { font-size: 1.2em; margin-bottom: 2em; margin-top: 2em; font-style: italic; }
+    pre { font-family: Menlo, Monaco, Consolas, Courier, "Courier New", monospace; }
+    pre { font-size: 75%;}
+    pre { padding: 0.5em 1ex; border: thin dotted silver; }
+    hr { border: 0; width: 80%; border-bottom: thin solid silver; }
+    p { text-align: justify; }
+    p.left { text-align: left; }
+    .inset { margin-left: 1ex; margin-right: 1ex; }
+    .indent { margin-left: 3ex; margin-right: 3ex; }
+    p.note:before { content: "Note: "; /* font-style: italic; */ }
+    p.note { display:block; border: thin dashed silver; padding: 0.5ex 0.5ex 0.5ex 6.5ex; text-indent: -6ex; }
+    p.important:before { content: "Important: "; }
+    .nobreak { white-space: nowrap; }
+    .left { text-align: left; }
+    .center { text-align: center; }
+
+    :link, :visited {
+      text-decoration: none !important;
+      border-bottom: 1px dotted !important;
+    }
+    :link:hover, :visited:hover {
+      border-bottom: 1px solid !important;
+    }
+    @media print {
+      :link, :visited {
+        border-bottom: 0 !important;
+        color: inherit !important;
+      }
+    }
+
+	</style>
+</head>
+<body><div id="container">
+
+	<h1 class="center">CACreateCert Examples</h1>
+
+	<h2>Foreword</h2>
+	<p>The examples here may be a bit weak on comments.  They are intended to show how to create a reasonable certificate chain using the <tt>CACreateCert</tt> tool.  For more details on the options available use <tt>CACreateCert -h</tt> to see the full utility documentation.</p>
+
+	<h2>The Desired Certificate Chain</h2>
+	<p>The examples below show how to use <tt>CACreateCert</tt> to create a certificate chain that looks like this:</p>
+	<img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAVEAAADICAMAAABmtiJPAAADAFBMVEX//////87/9/f/79b/78b/573/3q3/3pz/1oT3/+f3/9739+/39+f399b3597358b33r331qX3zoTv//fv/+/v7//v7/fv787v5+/v5+fv59bv587v3q3v1pTv1ozvzpzvxnvvvXPn///n7/fn7+/n597n3r3n1t7nzpznxoznvXPntWPe9/fe7//e7+/e3ufe1tbezs7ezr3exq3expTevZTevXverXverWPepWvelELW5/fW597W1tbW1sbWtXvWraXWrXPWnErWjELO5/fO1tbOzufOxs7OvZTOrYzOpXPOpWvOnFrOlFLOjErOjELOjCnG9/fG7//G5+fG1u/GxsbGnGPGlITGhCnGewC95/+93ve93ue9vbW9pXO9jGO9jFq9e0K9c0q9cym9cwC9YwCt3vet1uetztatxuetpa2tpXOtlIyte2Ote0qtc3ulxt6lrdalpaWllGule0Klc0qlc0KlaymlawClUgCc1veczu+cxsace2ucc1qUvd6UlJSUc4yUY0qUWgCUSgCUQgCUKQCMzu+MxueMnL2MjIyMY0KMWgCEzveEveeEvd6Erc6Epb2EhISEWimEQgB7zu97ve97vdZ7ta17pdZ7pc57lMZ7hFp7e3t7Y4R7Skp7KQB7AABzxu9zhHNzc3NzUilzSnNrvedrpd5rpdZrpc5rnMZrjKVrc61ra2trQmNjpd5jnMZjhJxjY2NjQlpjQgBjKQBard5anN5ahK1ac5xaY4xaQmtaAClaAABSjM5SUlJKpd5KhL1Ke5xKc3tKY6VKWmtKSkpKQmtKQilKQgBKKUJKAEJClNZCjM5ChMZCa61Ca5xCa3tCY5RCWmtCQkJCKSlCAEI5e4w5OTkxQkoxMTExACkxAAApjM4phMYpe8Ypa6UpY5wpWowpWnspKSkhISEYGBgQEBAICAgAhM4Ac8YAc70Aa60AY6UAWqUAWpQASowASmsAQqUAQowAQmsAMXMAKYwAKWMAKQAAAIQAAFoAADEAAAD/8acAAAAne53xAAAA/3RSTlP//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////wBm/IpZAAAO/UlEQVR4nOxdbWwUxxme69ln9n5VXlAvkRPCnyDkI3FKiS0riirZ1C2JLFsgqrhQiNLY4DSuqv4AQz/c5ORTaUlS1ZA4qWlPUQsqTSpVDWmbsmraJtcPsJT+qEqFrUKDToAtTJB69NZiOrMfvr27nbu529mdF2lfcbKYubt95tmZ2bln53kX3Q5DbHwMhSE2QkZFR8io6AgZFR0ho6IjZFR0yGY0ciXSSFyJSMbNDrmMRq4c33NXA4Tetec4XE5lLobxYQ/AD2OZ0Nkhk1Hc4akvdMCkVCKjHgmFSqk8RvGER0IRGoVIqTRGcdYzoQhlAVIq71o/AeQ7hIesU3mZG6HSpzLrzsuCzw5ZjOIZbkYjeJBZNwNv2EtjtI9F0lc2aen4D7C+D6E2Df8nifbjW0nWm/tCRu1gL51Sy99/ILO4uhMPNeOXEwfyatuFvcw+CnABJY1RJkmTR1GLTjplarZngQz5C0ORs+xRj0JG7ajCaBq15snfnvmBecKolg4Z5Qr2qKeMFsjVfdxk9EzVPhqO+pVgX5kIo01zL6AYHl6n96LHCyoZ+ExGwyvTSrBXT5NHEFqHMf4ZQmMY68NImdKZnTRcPa0Err7CVxJr6J9oouq7ELocMroS7GFfRwAc9OHvevEh7VziUc/YJwB2UZn6qADFOWS0JLxSCpNQufeZPN65A0moVEYJpbmZvloLJLdI9M3kgBIql1FCqYeQipwdchn1Qqlc4OyQzOjtBkmVDbpKyGf0dp0MAScUAKP1EwSbUumMNsQOZEqlX5mC/qDvIXv1JOOj/obc30wyP+5XSP1dL/sLfAl5irMIOiByKu2uiCAu4FEqh1GBfQtcN5XCqFgSgFEqgVHhvQpWNw2eUT+aD4nSoBn1qT8B6qbBMupjw8FwGiijvrYaCqUBMup7k2FwGhyjAbQXBKVBMRpQYwFwGhCjgbVUPqWB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" />
+<p>The idea is that the root certificate is only used to sign other, in–house certificates for each class of certificate.  In this example, the root certificate will sign both the server authority and client authority certificates (if email certificates were to issued, there’d also be an email authority certificate and if code signing certificates were to be issued there’d also be a code signing authority certificate and so on for any other certificate classes, but in the interest of keeping the example simpler those have been omitted).</p>
+
+<p>These three certificates (root, server authority and client authority) along with their private keys would be kept in-house by the certificate authority.</p>
+
+<p>When a new https server certificate is needed for an external entity, the in-house server authority signs and issues it, but only the external entity would have the private key for it.  Similarly when a new client authority certificate (that can sign client certificates) is needed for an external entity, the in-house client authority signs and issues it.</p>
+
+<p>The examples below will keep all of the created private keys and certificates together but in reality things will not work that way.</p>
+
+<h2>The Examples</h2>
+
+<p>The example code below assumes that <tt>CACreateCert</tt> is in the <tt>PATH</tt> and that all private keys and certificates are to be created in the current directory unless otherwise specified.  All command-line commands shown assume a POSIX shell.</p>
+
+<p>The OpenSSL command suite is required for these examples and should be available as the <tt>openssl</tt> command in the <tt>PATH</tt>.</p>
+
+<h3>Create the Root Authority</h3>
+
+<pre>
+# Create a 2048 bit private RSA key
+openssl genrsa -f4 2048 > root_key.pem
+CACreateCert --root --key root_key.pem "Acme Certificate Co." > root_crt.pem
+</pre>
+<p class="note">The <tt>-f4</tt> option to <tt>genrsa</tt> selects the public exponent of 65537 (instead of 3) and should be the default with most versions of OpenSSL.</p>
+
+<p>The file <tt>root_key.pem</tt> now contains the new 2048-bit RSA root private key and the file <tt>root_crt.pem</tt> now contains the new root certificate.</p>
+
+<h3>Create the Server Authority</h3>
+
+<pre>
+# Create a 2048 bit private RSA key
+openssl genrsa -f4 2048 > serverauth_key.pem
+openssl rsa -in serverauth_key.pem -pubout |
+  CACreateCert --subca --cert root_crt.pem --key root_key.pem \
+  "Acme Server Authority" > serverauth_crt.pem
+</pre>
+
+<p>The file <tt>serverauth_key.pem</tt> now contains the new 2048-bit RSA server authority private key and the file <tt>serverauth_crt.pem</tt> now contains the new server authority certificate.</p>
+
+<h3>Create the Client Authority</h3>
+
+<pre>
+# Create a 2048 bit private RSA key
+openssl genrsa -f4 2048 > clientauth_key.pem
+openssl rsa -in clientauth_key.pem -pubout |
+  CACreateCert --subca --cert root_crt.pem --key root_key.pem \
+  "Acme Client Authority" > clientauth_crt.pem
+</pre>
+
+<p>The file <tt>clientauth_key.pem</tt> now contains the new 2048-bit RSA client authority private key and the file <tt>clientauth_crt.pem</tt> now contains the new client authority certificate.</p>
+
+<h3 id="site1">Create Site 1 Keys &amp; Certificates</h3>
+
+<p>Normally the private keys created here for Site 1 would remain with Site 1 and not be shared with anyone else, but for this example they are just kept together with all the other keys.  Only the public key portion of the private keys need be communicated to the authority for signing purposes.</p>
+
+<pre>
+openssl genrsa -f4 2048 > site1server_key.pem
+openssl genrsa -f4 2048 > site1client_key.pem
+openssl rsa -in site1server_key.pem -pubout |
+  CACreateCert --server --cert serverauth_crt.pem --key serverauth_key.pem \
+  "site1.example.com" > site1server_crt.pem
+openssl rsa -in site1client_key.pem -pubout |
+  CACreateCert --subca --cert clientauth_crt.pem --key clientauth_key.pem \
+  "Site 1 Client Authority" > site1client_crt.pem
+</pre>
+
+<p class="note">It’s important that the canonical domain name be given when creating <tt>--server</tt> certificates.  It’s the <tt>"site1.example.com"</tt> part of the above command.</p>
+
+<p>Now the files <tt>site1server_key.pem</tt> and <tt>site1server_crt.pem</tt> contain the private key and certificate for the https server for domain <tt>site1.example.com</tt>.  Similarly the files <tt>site1client_key.pem</tt> and <tt>site1client_crt.pem</tt> now contain the private key and client certificate authority for Site 1.</p>
+
+<p class="note">There’s nothing to prevent the <tt>site1client_crt.pem</tt> from signing certificate types other than client certificates.  However, since client certificates need not be signed by a root certificate that the client trusts, <tt>site1client_crt.pem</tt> could just as easily have been made a <tt>--root</tt> certificate (instead of a <tt>--subca</tt>) so that a client that trusts <tt>root_crt.pem</tt> does not automatically trust anything signed by <tt>site1client_crt.pem</tt>.</p>
+
+<h3>Create other Site Keys &amp; Certificates</h3>
+
+<p>The same procedure used for Site 1 can be duplicated to make the keys and certificates for additional sites.</p>
+
+<h3>Deploying a Site 1 Server</h3>
+
+<p>For this example, assuming an Apache web server will be used, here’s the procedure needed to properly configure the certificates.</p>
+
+<h4>Create the Server Intermediate Chain</h4>
+
+<p>All the certificates leading from the server’s certificate up to and including the root certificate need to be collected into a file in order from the certificate that signed the server’s certificate on up the chain to the root.</p>
+
+<pre>
+cat serverauth_crt.pem root_crt.pem > site1chain_crt.pem
+</pre>
+
+<p>The file <tt>site1chain_crt.pem</tt> now contains the certificates for the part of the certificate chain above Site 1’s server certificate.</p>
+
+<h4 id="apache">Adjust the Server Configuration</h4>
+
+<p>The apache server certificate configuration directives that are needed look like this:</p>
+
+<pre>
+# A ServerName or ServerAlias directive matching the
+# canonical DNS name embedded in site1server_crt.pem
+# will generally also be required.
+
+# For the server's https authentication
+SSLCertificateChainFile site1chain_crt.pem
+SSLCertificateFile site1server_crt.pem
+SSLCertificateKeyFile site1server_key.pem
+
+
+# Client certificate authentication is activated with
+# the SSLVerifyClient directive and the results
+# transfered to the REMOTE_USER variable with
+# the SSLOptions +FakeBasicAuth and the
+# Require valid-user directives.
+
+# For the server to do client authentication
+SSLCACertificateFile root_crt.pem
+SSLCADNRequestFile site1client_crt.pem
+</pre>
+<p class="note">If the <tt>site1client_crt.pem</tt> certificate was created with <tt>--root</tt> instead of <tt>--subca</tt> then the <tt>SSLCACertificateFile</tt> directive should also specify <tt>site1client_crt.pem</tt> instead of <tt>root_crt.pem</tt>.</p>
+
+<h3 id="client">Creating Client Authentication Certificates</h3>
+
+<p>These examples assume the Site 1 certificates shown <a href="#site1">above</a> have been created in the current directory.</p>
+
+<h4>Create the Client Intermediate Chain</h4>
+
+<p>Much like for the server’s certificate, the chain of intermediate certificates leading from the to-be-generated client certificates up to the client authentication root certificate need to be collected.  In this case the root certificate may be omitted since the server is guaranteed to already have it for any successful client authentication.</p>
+
+<p>To generate the Site 1 client chain that will be needed to generate Site 1 client authentication user certificates do the following:</p>
+
+<pre>
+cat site1client_crt.pem clientauth_crt.pem > site1usuffix_crt.pem
+</pre>
+
+<p>Now the <tt>site1suffix_crt.pem</tt> file contains the certificates that need to be appended to any generated Site 1 client authentication user certificates.</p>
+
+<p class="note">If the <tt>site1client_crt.pem</tt> certificate was created with <tt>--root</tt> instead of <tt>--subca</tt> then the correct <tt>site1usuffix_crt.pem</tt> file contents are simply the empty file (use <tt class="nobreak">: > site1usuffix_crt.pem</tt> to create it).</p>
+
+<h4>Acquire a User RSA Public Key</h4>
+
+<p>The <tt>CACreateCert</tt> utility can create client authentication certificates from RSA public keys.  There are several common ways to acquire an RSA public key:</p>
+
+<ol>
+<li>From an RSA private key
+<p>The Site 1 RSA public key in X509 format can be generated from the Site 1 RSA private key like so:</p>
+<pre>openssl rsa -in site1server_key.pem -pubout</pre></li>
+
+<li>From an OpenSSH RSA public key
+<p><tt>CACreateCert</tt> can read an OpenSSH protocol 2 public RSA key file directly.  For example, if OpenSSH has created a private key in <tt>~/.ssh/id_rsa</tt> then it has also created the corresponding public key in <tt>~/.ssh/id_rsa.pub</tt> which can be read directly by <tt>CACreateCert</tt>.</p>
+
+<p>An OpenSSH public key can also be created from the Site 1 RSA private key like so:</p>
+<pre>
+# OpenSSH is very picky about private key permissions
+chmod go-rwx site1server_key.pem
+ssh-keygen -y -f site1server_key.pem
+</pre></li>
+
+<li>From a new OpenSSH RSA key
+<p>The <tt>ssh-keygen -t rsa</tt> command can be used to generate an RSA private key and the <tt class="nobreak">ssh-keygen -y -f</tt> public key at the same time.</p></li>
+
+</ol>
+
+<h4 id="user">Generate the User Client Certificate</h4>
+
+<p>The following example assumes an RSA public key for Pat (in either X509 public key format or OpenSSH public key format) is located in the file <tt>id_rsa_pat.pub</tt> (perhaps copied from <tt>~pat/.ssh/id_rsa.pub</tt>).</p>
+
+<p class="note">For you folks following along at home that want to generate an <tt>id_rsa_pat.pub</tt> file in order to continue trying out these instructions, execute the command:<br /><tt class="nobreak indent">ssh-keygen -t rsa -b 2048 -N '' -q -f id_rsa_pat</tt><br />to create the <tt>id_rsa_pat.pub</tt> file.</p>
+
+<p>A client authentication certificate for use with the Site 1 server may be generated from the <tt>id_rsa_pat.pub</tt> file like so:</p>
+<pre>
+cat id_rsa_pat.pub |
+  CACreateCert  --client --cert site1client_crt.pem --key site1client_key.pem \
+  "pat" > site1patbare_crt.pem
+</pre>
+
+<p>The bare certificate is not usable by itself however (unless the <tt>site1client_crt.pem</tt> certificate was created with <tt>--root</tt> instead of <tt>--subca</tt>).  To make a usable client authentication certificate file append the previously generated suffix like so:</p>
+
+<pre>
+cat site1patbare_crt.pem site1usuffix_crt.pem > site1patuser_crt.pem
+</pre>
+
+<p>Note that at no point is the <tt>id_rsa_pat</tt> private key needed to create the user’s client authentication certificate.  The generated <tt>site1patuser_crt.pem</tt> certificate can be used together with the <tt>id_rsa_pat</tt> private key file to authenticate to the Site 1 server as the user <tt>"pat"</tt>.</p>
+
+<p class="note">Assuming the server is configured correctly (see <a href="#apache">above</a>), the name provided to <tt>CACreateCert --client</tt> will end up in the <tt>REMOTE_USER</tt> variable (in this case <tt>pat</tt>) but it will be prefixed by <tt>/UID=</tt> so when <tt>site1patuser_crt.pem</tt> is used to successfully authenticate, the server will (assuming it’s been configured correctly) set <tt>REMOTE_USER</tt> to <tt>/UID=pat</tt> when executing any scripts.  Any scripts inspecting <tt>REMOTE_USER</tt> must be written to accommodate the <tt>/UID=</tt> prefix.</p>
+
+<h3>Using Client Authentication with Git</h3>
+
+<p>Presuming that a server has been configured for user authentication using client certificates (see <a href="#apache">above</a>), as the means to authenticate users for push privileges using the git smart http protocol, then the following git commands would configure git to authenticate as the <tt>"pat"</tt> user:</p>
+
+<pre>
+git config http.sslCAInfo root_crt.pem
+git config http.sslCert site1patuser_crt.pem
+git config http.sslKey id_rsa_pat
+</pre>
+
+<p>If the Site 1 server allows the user <tt>pat</tt> to push, then this git configuration shows how to authenticate as <tt>pat</tt> using the <tt>site1patuser_crt.pem</tt> client authentication user certificate in order to push.</p>
+
+<p class="last">Note that <tt>site1patuser_crt.pem</tt> file that has had the intermediate certificates suffix added is used and <em>not</em> the bare file (<tt>site1patbare_crt.pem</tt>) which fail to authenticate.</p>
+
+</div><span class="aftermargin"></span></body>
+</html>
