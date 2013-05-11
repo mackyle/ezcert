@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.7';
+  *VERSION = \'1.2.8';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -102,11 +102,11 @@ BEGIN {
 BEGIN {
   $USAGE = <<USAGE;
 Usage: CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
-        [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
-        [--root | --subca | --server | --codesign | --applecodesign | --email]
-        [--client] [--rootauth] [--authext] [--pathlen n] [--random|--no-random]
-        --key priv_key_file [--cert signing_cert] "name string"
-        [< pub_key_file] > out_cert.pem
+         [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
+         [--root | --subca | --server | --codesign | --applecodesign | --email]
+         [--client] [--rootauth] [--authext] [--pathlen n]
+         [--random | --no-random] [--in pub_key_file] [--out out_cert.pem]
+         --key priv_key_file [--cert signing_cert] "name string"
 USAGE
   $HELP = <<HELP;
 NAME
@@ -114,14 +114,14 @@ NAME
 
 SYNOPSIS
        CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
-        [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
-        [--root | --subca | --server | --codesign | --applecodesign | --email]
-        [--client] [--rootauth] [--authext] [--pathlen n] [--random|--no-random]
-        --key priv_key_file [--cert signing_cert] "name string"
-        [< pub_key_file] > out_cert.pem
+         [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
+         [--root | --subca | --server | --codesign | --applecodesign | --email]
+         [--client] [--rootauth] [--authext] [--pathlen n]
+         [--random | --no-random] [--in pubkeyfile] [--out pemcertfile]
+         --key priv_key_file [--cert signing_cert] "name string"
        CACreateCert --root [--random] --key priv_key_file "name string" > ca.pem
        CACreateCert --key priv_key_file --cert signing_cert "name string"
-        < pub_key_file > out_cert.pem
+         < pub_key_file > out_cert.pem
 
 DESCRIPTION
        CACreateCert creates a new certificate.  Various certificate types are
@@ -224,7 +224,8 @@ OPTIONS
               from standard input that is a tty indicates that the public key
               was accidentally omitted.  If that is not the case, the -t option
               must be given to allow reading the public key from standard input
-              when standard input is a tty.
+              when standard input is a tty.  This option is always implied if
+              the --in option is used with a value other than "-".
 
        --digest name
               Select the digest to use in the generated certificate.  Must be
@@ -305,12 +306,18 @@ OPTIONS
               either PEM or DER format.  The public key embedded in signing_cert
               must match the one in the priv_key_file or an error will occur.
 
-       < pub_key_file
+       --in pub_key_file
               Ignored if --root is given.  The public key for the certificate
               to be created.  Must be different than the public key contained in
               priv_key_file.  May be an OpenSSH protocol 2 format RSA public key
               or an X.509 format public key (in either PEM or DER format).  See
-              also the --pubx509 option.
+              also the --pubx509 option.  If pub_key_file is "-" or this option
+              is omitted then standard input is read.
+
+       --out out_cert.pem
+              The generated certificate will be written to out_cert.pem.  If
+              this option is omitted or out_cert.pem is "-" then the generated
+              certificate is written to standard output.
 
 NOTES
        All systems support sha1 digest certificates, but sha1 should really not
@@ -577,12 +584,12 @@ sub RandomID(;$)
   my $randfile = "/dev/random";
   $randfile = "/dev/urandom" if -e "/dev/urandom";
   open(RANDIN, "<", $randfile)
-    or die "Cannot open $randfile for input\n";
+    or die "Cannot open $randfile for input: $!\n";
   my $result = '';
   for (my $cnt = 0; $cnt < 20; ++$cnt) {
     my $byte;
     sysread(RANDIN, $byte, 1)
-      or die "Cannot read from $randfile\n";
+      or die "Cannot read from $randfile: $!\n";
     if (!$cnt) {
       my $val = unpack('C', $byte);
       $val &= 0x7F;
@@ -1101,6 +1108,8 @@ sub main
   my $boolFALSE = pack('C*',0x01,0x01,0x00);
   my $v3Begin = pack('C',0x17).DERLength(13)."970811000000Z";
   my $noExpiry = pack('C',0x18).DERLength(15)."99991231235959Z";
+  my $infile = '-';
+  my $outfile = '-';
 
   #tests;
   eval {GetOptions(
@@ -1128,7 +1137,9 @@ sub main
       "digest=s" => \$digestChoice,
       "key|k=s" => \$keyfile,
       "cert|c=s" => \$certfile,
-      "pathlen=i" => \$pathlen
+      "pathlen=i" => \$pathlen,
+      "infile|c=s" => \$infile,
+      "outfile|c=s" => \$outfile
     )} || $help
       or die $USAGE;
   if ($help) {
@@ -1143,27 +1154,41 @@ sub main
     }
     exit(0);
   }
+  die "--in requires a filename\n" if !$root && !$infile;
+  die "--out requires a filename\n" if !$outfile;
   $client = 1 if
     !$root && !$subca && !$server && !$codesign && !$applecodesign && !$email;
   $verbose = 1 if $debug || $check;
   $quiet = 0 if $verbose || $check;
   print STDERR $VERSIONMSG if $verbose;
   my $keytype = 'OpenSSH';
-  $keytype = 'pubx509' if $pubx509;
+  my $n = 'n';
+  $keytype = 'pubx509', $n = '' if $pubx509;
   die $USAGE if $root && $useRandom && $useNoRandom;
   die $USAGE if !$keyfile || (!$root && !$certfile) || (!$check && @ARGV != 1);
-  die "Standard input is a tty (which is an unlikely source of a $keytype "
+  die "Standard input is a tty (which is an unlikely source of a$n $keytype "
     . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
-    if !$root && -t STDIN && !$termOK;
+    if !$root && $infile eq '-' && -t STDIN && !$termOK;
   $useRandom = 1 if $root && !$useNoRandom;
   die "Name may not be empty\n"
     unless $check || $ARGV[0] || ($root && $useRandom);
   my $opensshdotpub;
+  my $infilename;
   if (!$root) {
     local $/ if $pubx509;
-    !!($opensshdotpub = <STDIN>)
-      or die "Cannot read $keytype public key from STDIN\n";
+    my $input;
+    my $infilename;
+    if ($infile ne '-') {
+      $infilename = "\"$infile\"";
+      open($input, '<', $infile)
+        or die "Cannot open $infilename for input: $!\n";
+    } else {
+      $input = *STDIN;
+      $infilename = 'standard input';
+    }
+    !!($opensshdotpub = <$input>)
+      or die "Cannot read $keytype public key from $infilename\n";
     if (!$pubx509) {
       my $auto509 = 0;
       if ($opensshdotpub =~ /^----[- ]BEGIN PUBLIC KEY[- ]----/) {
@@ -1173,7 +1198,9 @@ sub main
         my $input = $opensshdotpub;
         $input =~ s/((?:\r\n|\n|\r).*)$//os;
         my @fields = split(' ', $input, 3);
-        if (@fields < 2 || length($fields[1]) < 16 || $fields[1] !~ m|^[0-9A-Za-z+/=]+$|) {
+        if (@fields < 2 ||
+            length($fields[1]) < 16 ||
+            $fields[1] !~ m|^[0-9A-Za-z+/=]+$|) {
           $auto509 = 1;
         }
       }
@@ -1182,10 +1209,11 @@ sub main
         $keytype = 'pubx509';
         print STDERR "auto detected --pubx509 option\n" if $debug;
         local $/;
-        my $extra = <STDIN>;
+        my $extra = <$input>;
         $opensshdotpub .= $extra if $extra;
       }
     }
+    close($input) if $infile ne '-';
   }
   die "Cannot read key file $keyfile\n" if ! -r $keyfile;
   die "Cannot read certificate file $certfile\n" if !$root && ! -r $certfile;
@@ -1217,19 +1245,20 @@ sub main
     print WRITEKEY $opensshdotpub;
     close(WRITEKEY);
     local $/;
-    die "Error reading X.509 format RSA public key from standard input\n"
+    die "Error reading X.509 format RSA public key from $infilename\n"
       unless !!($opensshpub = <READKEY>);
     waitpid($pid, 0);
     close(READKEY);
     $sshcmnt = undef;
     ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1) = GetKeyInfo($opensshpub);
-    die "Unparseable X.509 public key format read from standard input\n"
+    die "Unparseable X.509 public key format read from $infilename\n"
       unless $sshkeybits;
   }
   else {
     ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub) =
       GetOpenSSHKeyInfo($opensshdotpub);
-    die "Unparseable OpenSSH public key read from STDIN\n" unless $sshkeybits;
+    die "Unparseable OpenSSH public key read from $infilename\n"
+      unless $sshkeybits;
     die "Unsupported OpenSSH public key type ($sshkeybits), must be ssh-rsa\n"
       unless $sshkeyexp;
   }
@@ -1268,17 +1297,17 @@ sub main
     open(STDERR, '>', "/dev/null") or die "Cannot redirect STDERR: $!";
     open(READKEY, "-|", "openssl", "rsa", "-inform", $inform, "-outform", "DER",
         "-pubout", "-passin", "pass:", "-in", $keyfile)
-      or die "Cannot read RSA private key in $keyfile\n";
+      or die "Cannot read RSA private key in \"$keyfile\": $!\n";
     open(STDERR, ">&", $olderr) or die "Cannot dup \$olderr: $!";
     local $/;
-    die "Error reading RSA private key in $keyfile\n"
+    die "Error reading RSA private key in \"$keyfile\"\n"
       unless !!($pubkey = <READKEY>);
     close(READKEY);
   }
   $opensshpub = $pubkey if $root;
   my ($pubkeybits,$pubkeyexp,$pubkeyid,$pfmd5,$pfsha1) = GetKeyInfo($pubkey);
   $sshkeyid = $pubkeyid if $root;
-  die "Unparseable public key format in $keyfile\n" unless $pubkeybits;
+  die "Unparseable public key format in \"$keyfile\"\n" unless $pubkeybits;
   print STDERR "RSA Private Key $keyfile:\n",
     "  bits=$pubkeybits pubexp=$pubkeyexp\n" if $verbose;
   print STDERR "  keyid=",
@@ -1315,16 +1344,16 @@ sub main
       #open(STDERR, '>', "/dev/null") or die "Cannot redirect STDERR: $!";
       open(READCERT, "-|", "openssl", "x509", "-inform", $inform, "-outform",
           "DER", "-in", $certfile)
-        or die "Cannot read X.509 certificate in $certfile\n";
+        or die "Cannot read X.509 certificate in \"$certfile\"\n";
       #open(STDERR, ">&", $olderr) or die "Cannot dup \$olderr: $!";
       local $/;
-      die "Error reading X.509 certificate in $certfile\n"
+      die "Error reading X.509 certificate in \"$certfile\"\n"
         unless !!($signcert = <READCERT>);
       close(READCERT);
     }
     ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid) =
       GetCertInfo($signcert);
-    die "Unparseable certificate format in $certfile\n" unless $cver;
+    die "Unparseable certificate format in \"$certfile\"\n" unless $cver;
     my $dser = $cser;
     substr($dser,0,1) = '' if unpack('C',substr($cser,0,1)) == 0x00;
     print STDERR "X.509 Certificate $certfile:\n",
@@ -1462,8 +1491,15 @@ sub main
   my $cert = $tbs . $sigAlg . $sig;
   $cert = pack('C',0x30).DERLength(length($cert)).$cert;
   my $base64 = join("\n", BreakLine(encode_base64($cert, ''), 64))."\n";
-  print "-----BEGIN CERTIFICATE-----\n",
-        $base64,
-        "-----END CERTIFICATE-----\n";
+  my $output;
+  if ($outfile ne '-') {
+    open($output, ">", $outfile)
+      or die "Cannot open \"$outfile\" for output: $!\n";
+  } else {
+    $output = *STDOUT;
+  }
+  print $output "-----BEGIN CERTIFICATE-----\n",
+                $base64,
+                "-----END CERTIFICATE-----\n";
   return 0;
 }
