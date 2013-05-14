@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.8';
+  *VERSION = \'1.2.9';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -104,7 +104,7 @@ BEGIN {
 Usage: CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
          [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
          [--root | --subca | --server | --codesign | --applecodesign | --email]
-         [--client] [--rootauth] [--authext] [--pathlen n]
+         [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pub_key_file] [--out out_cert.pem]
          --key priv_key_file [--cert signing_cert] "name string"
 USAGE
@@ -116,7 +116,7 @@ SYNOPSIS
        CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
          [--now] [--pubx509] [-t] [--digest=sha1|sha224|sha256|sha384|sha512]
          [--root | --subca | --server | --codesign | --applecodesign | --email]
-         [--client] [--rootauth] [--authext] [--pathlen n]
+         [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pubkeyfile] [--out pemcertfile]
          --key priv_key_file [--cert signing_cert] "name string"
        CACreateCert --root [--random] --key priv_key_file "name string" > ca.pem
@@ -318,6 +318,12 @@ OPTIONS
               The generated certificate will be written to out_cert.pem.  If
               this option is omitted or out_cert.pem is "-" then the generated
               certificate is written to standard output.
+
+       --suffix suffix.pem
+              Primarily intended to be used when generating client certificates,
+              if this option is given, then the entire contents of suffix.pem is
+              written to the same location as the generated certificate
+              immediately following the certificate.
 
 NOTES
        All systems support sha1 digest certificates, but sha1 should really not
@@ -1110,6 +1116,8 @@ sub main
   my $noExpiry = pack('C',0x18).DERLength(15)."99991231235959Z";
   my $infile = '-';
   my $outfile = '-';
+  my $suffixfile = undef;
+  my $suffix = '';
 
   #tests;
   eval {GetOptions(
@@ -1139,7 +1147,8 @@ sub main
       "cert|c=s" => \$certfile,
       "pathlen=i" => \$pathlen,
       "infile|c=s" => \$infile,
-      "outfile|c=s" => \$outfile
+      "outfile|c=s" => \$outfile,
+      "suffixfile|c=s" => \$suffixfile
     )} || $help
       or die $USAGE;
   if ($help) {
@@ -1156,6 +1165,7 @@ sub main
   }
   die "--in requires a filename\n" if !$root && !$infile;
   die "--out requires a filename\n" if !$outfile;
+  die "--suffix requires a filename\n" if defined($suffixfile) && !$suffixfile;
   $client = 1 if
     !$root && !$subca && !$server && !$codesign && !$applecodesign && !$email;
   $verbose = 1 if $debug || $check;
@@ -1175,6 +1185,13 @@ sub main
     unless $check || $ARGV[0] || ($root && $useRandom);
   my $opensshdotpub;
   my $infilename;
+  if ($suffixfile) {
+    open(SUFFIX, '<', $suffixfile)
+      or die "Cannot open $suffixfile for input: $!\n";
+    local $/;
+    $suffix = <SUFFIX>;
+    close(SUFFIX);
+  }
   if (!$root) {
     local $/ if $pubx509;
     my $input;
@@ -1500,6 +1517,8 @@ sub main
   }
   print $output "-----BEGIN CERTIFICATE-----\n",
                 $base64,
-                "-----END CERTIFICATE-----\n";
+                "-----END CERTIFICATE-----\n",
+                $suffix;
+  close($output) if $outfile ne '-';
   return 0;
 }
