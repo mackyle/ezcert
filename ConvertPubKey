@@ -21,7 +21,6 @@ exit(&main());
 use strict;
 use warnings;
 use bytes;
-use Carp;
 
 use MIME::Base64;
 use IPC::Open2;
@@ -228,7 +227,6 @@ sub DERLength($)
 {
   # return a DER encoded length
   my $len = shift;
-  confess "bad len" unless $len =~ /^[0-9]+$/;
   return pack('C',$len) if $len <= 127;
   return pack('C2',0x81, $len) if $len <= 255;
   return pack('Cn',0x82, $len) if $len <= 65535;
