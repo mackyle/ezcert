@@ -1,0 +1,810 @@
+#!/usr/bin/perl
+
+# ConvertPubKey - Convert public keys to/from OpenSSH/X509 format
+# Copyright (c) 2011,2012,2013 Kyle J. McKay.  All rights reserved.
+
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU Affero General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+exit(&main());
+
+use strict;
+use warnings;
+use bytes;
+use Carp;
+
+use MIME::Base64;
+use IPC::Open2;
+use Digest::MD5 qw(md5 md5_hex md5_base64);
+use Getopt::Long qw(:config gnu_getopt);
+
+our $VERSION;
+my $VERSIONMSG;
+my $HELP;
+my $USAGE;
+
+BEGIN {
+  *VERSION = \'1.0';
+  $VERSIONMSG = "ConvertPubKey version $VERSION\n" .
+    "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
+    "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
+    "http://gnu.org/licenses/agpl.html\n" .
+    "This is free software: you are free to change and redistribute it.\n" .
+    "There is NO WARRANTY, to the extent permitted by law.\n";
+}
+
+BEGIN {
+  eval {
+    require Digest::SHA1;
+    Digest::SHA1->import(
+      qw(
+        sha1 sha1_hex sha1_base64
+      )
+    ); 1} ||
+  eval {
+    require Digest::SHA;
+    Digest::SHA->import(
+      qw(
+        sha1 sha1_hex sha1_base64
+      )
+    ); 1} ||
+  eval {
+    require Digest::SHA::PurePerl;
+    Digest::SHA::PurePerl->import(
+      qw(
+        sha1 sha1_hex sha1_base64
+      )
+    ); 1} ||
+  die "One of Digest::SHA1 or Digest::SHA or Digest::SHA::PurePerl "
+    . "must be available\n";
+}
+
+BEGIN {
+  $USAGE = <<'USAGE';
+Usage: ConvertPubKey [-h] [--version] [--verbose] [--debug] [--pubx509] [-t]
+         [--format ssh|pem|der] [--in pub_key_file] [--out out_file.pub]
+         [--quiet] [--check] [optional comment here]
+USAGE
+  $HELP = <<'HELP';
+NAME
+       ConvertPubKey -- convert public key formats
+
+SYNOPSIS
+       ConvertPubKey [-h] [--version] [--verbose] [--debug] [--pubx509] [-t]
+         [--format ssh|pem|der] [--in pub_key_file] [--out out_file.pub]
+         [--quiet] [--check] [optional comment here]
+
+DESCRIPTION
+       ConvertPubKey converts public keys to/from OpenSSH/X509 format.
+
+       Input may be an X.509 public key in either PEM or DER format or an
+       OpenSSH public key.
+
+       Output defaults to the other kind of key so that if input is an OpenSSH
+       public key, output will be an X.509 PEM public key and if input is an
+       X.509 PEM or DER public key, output will be an OpenSSH public key.
+
+       When outputing an OpenSSH public key, the comment, if any will be
+       placed at the end of the line separated from the Base64 of the OpenSSH
+       public key by a space (this is the normal location for an OpenSSH public
+       key comment).  Web sites that accept OpenSSH public keys often require
+       the comment to be of the form user@host or they will reject the public
+       key.
+
+       No validation is performed on the "optional comment here" value.
+
+OPTIONS
+       -h/--help
+              Show this help
+
+       -V/--version
+              Show the ConvertPubKey version
+
+       -v/--verbose
+              Produce extra informational messages to standard error.
+
+       --debug
+              Show debugging information.  Automatically enables --verbose.
+              Suppresses --quiet.
+
+       --quiet
+              Suppress all messages except errors.  Ignored if --debug or
+              --verbose given.
+
+       --check
+              Perform all normal validation checks but do not actually output a
+              public key.  Automatically enables --verbose.
+
+       --pubx509/--pubX509
+              Force the public key read from standard input to be interpreted
+              as an X.509 format public key.  Normally this should be
+              automatically detected and this option should not be needed.
+
+       -t
+              Allow reading the public key from standard input when standard
+              input is a tty.  In most cases attempting to read the public key
+              from standard input that is a tty indicates that the public key
+              was accidentally omitted.  If that is not the case, the -t option
+              must be given to allow reading the public key from standard input
+              when standard input is a tty.  This option is always implied if
+              the --in option is used with a value other than "-".
+
+       --format ssh|pem|der
+              Normally the output format is automatically chosen based on the
+              input format.  If the input format is an X.509 DER or PEM format
+              public key, the output format will be an OpenSSH public key.  If
+              the input format is an OpenSSH public key, the output format will
+              be an X.509 PEM format public key.  This option can be used to
+              override the default output format.  Using "ssh" requests the
+              output be an OpenSSH format public key.  Giving "pem" requests the
+              output be an X.509 PEM format public key and "der" requests output
+              be an X.509 DER format public key.
+
+       --in pub_key_file
+              The public key to convert.  May be an OpenSSH protocol 2 format
+              public key or an X.509 format public key (in either PEM or DER
+              format).  See also the --pubx509 option.  If pub_key_file is "-"
+              or this option is omitted then standard input is read.
+
+       --out out_file.pub
+              The converted public key will be written to out_file.pub.  If
+              this option is omitted or out_file.pub is "-" then the converted
+              public key is written to standard output.
+
+NOTES
+       Only minimal checking is done on the input public key.
+
+       OpenSSH ssh-rsa and ssh-dss key types (and their corresponding X.509
+       equivalents) are supported, other types will result in errors.
+
+       Neither OpenSSH nor OpenSSL are needed to perform the key conversion.
+
+TIPS
+       Create a new 2048-bit RSA private key in new_rsa_2048 with OpenSSL:
+
+           openssl genrsa -f4 -out new_rsa_2048 2048
+
+       Store the OpenSSH format public key for new_rsa_2048 in the file
+       new_rsa_2048.pub with comment "test@example.com":
+
+           openssl rsa -in new_rsa_2048 -pubout | \ 
+             ConvertPubKey --out new_rsa_2048.pub test@example.com
+
+HELP
+}
+
+sub formatbold($;$)
+{
+  my $str = shift;
+  my $fancy = shift || 0;
+  if ($fancy) {
+    $str = join('',map($_."\b".$_, split(//,$str)));
+  }
+  return $str;
+}
+
+sub formatul($;$)
+{
+  my $str = shift;
+  my $fancy = shift || 0;
+  if ($fancy) {
+    $str = join('',map("_\b".$_, split(//,$str)));
+  }
+  return $str;
+}
+
+sub formatman($;$)
+{
+  my $man = shift;
+  my $fancy = shift || 0;
+  my @inlines = split(/\n/, $man, -1);
+  my @outlines = ();
+  foreach my $line (@inlines) {
+    if ($line =~ /^[A-Z]+$/) {
+      $line = formatbold($line, $fancy);
+    }
+    else {
+      $line =~ s/'''(.+?)'''/formatbold($1,$fancy)/gse;
+      $line =~ s/''(.+?)''/formatul($1,$fancy)/gse;
+    }
+    push (@outlines, $line);
+  }
+  my $result = join("\n", @outlines);
+  $result =~ s/\\\n//gso;
+  return $result;
+}
+
+sub DERLength($)
+{
+  # return a DER encoded length
+  my $len = shift;
+  confess "bad len" unless $len =~ /^[0-9]+$/;
+  return pack('C',$len) if $len <= 127;
+  return pack('C2',0x81, $len) if $len <= 255;
+  return pack('Cn',0x82, $len) if $len <= 65535;
+  return pack('CCn',0x83, ($len >> 16), $len & 0xFFFF) if $len <= 16777215;
+  # Silently returns invalid result if $len > 2^32-1
+  return pack('CN',0x84, $len);
+}
+
+sub SingleOID($)
+{
+  # return a single DER encoded OID component
+  no warnings;
+  my $num = shift;
+  $num += 0;
+  my $result = pack('C', $num & 0x7F);
+  $num >>= 7;
+  while ($num) {
+    $result = pack('C', 0x80 | ($num & 0x7F)) . $result;
+    $num >>= 7;
+  }
+  return $result;
+}
+
+sub DEROID($)
+{
+  # return a DER encoded OID complete with leading 0x06 and DER length
+  # Input is a string of decimal numbers separated by '.' with at least
+  # two numbers required.
+  no warnings;
+  my @ids = split(/[.]/,$_[0]);
+  push(@ids, 0) while @ids < 2; # return something that's kind of valid
+  unshift(@ids, shift(@ids) * 40 + shift(@ids)); # combine first two
+  my $ans = '';
+  foreach my $num (@ids) {
+    $ans .= SingleOID($num);
+  }
+  return pack('C',0x6).DERLength(length($ans)).$ans;
+}
+
+sub ReadDERLength($)
+{
+  # Input is a DER encoded length with possibly extra trailing bytes
+  # Output is an array of length and bytes-used-for-encoded-length
+  my $der = shift;
+  return undef unless length($der);
+  my $byte = unpack('C',substr($der,0,1));
+  return ($byte, 1) if $byte <= 127;
+  return undef if $byte == 128 || $byte > 128+8; # Fail if greater than 2^64
+  my $cnt = $byte & 0x7F;
+  return undef unless length($der) >= $cnt+1; # Fail if not enough bytes
+  my $val = 0;
+  for (my $i = 0; $i < $cnt; ++$i) {
+    $val <<= 8;
+    $val |= unpack('C',substr($der,$i+1,1));
+  }
+  return ($val, $cnt+1);
+}
+
+sub CountKeyBits($)
+{
+  my $data = shift;
+  return undef if length($data) < 1;
+  my $bits = 8 * length($data);
+  # but leading zero bits must be subtracted
+  my $byte = unpack('C',substr($data,0,1));
+  if (!$byte) {
+    $bits -= 8;
+  } else {
+    return undef if $byte & 0x80; # negative is not valid
+    while (!($byte & 0x80)) {
+      --$bits;
+      $byte <<= 1;
+    }
+  }
+  return $bits;
+}
+
+sub PackUIntBytes($)
+{
+  my $intbytes = shift || '';
+  return pack('C2',0x02,0x00) unless length($intbytes);
+  my $byte = unpack('C',substr($intbytes,0,1));
+  $intbytes = pack('C',0x00).$intbytes if $byte & 0x80; # would've been negative
+  return pack('C',0x02).DERLength(length($intbytes)).$intbytes;
+}
+
+sub GetOpenSSHKeyInfo($)
+{
+  # Input is an OpenSSH public key in .pub format
+  # Output is an array of:
+  #   key type (either 'rsa' or 'dsa')
+  #   how many bits in the modulus
+  #   the public exponent (undef if not RSA)
+  #   the key id
+  #   the OpenSSH md5 fingerprint
+  #   the OpenSSH sha1 fingerprint
+  #   the OpenSSH comment (may be '')
+  #   the OpenSSH public key in OpenSSL PUBLIC KEY DER format
+  # or undef if the key is unparseable
+  # or just the key type if it's not ssh-rsa
+  #
+  # Expected format is:
+  #   ssh-rsa BASE64PUBLICKEYDATA optional comment here
+  # or
+  #   ssh-dss BASE64PUBLICKEYDATA optional comment here
+  # where the BASE64PUBLICKEYDATA when decoded produces:
+  #   RSA:
+  #     4 Byte Big-Endian length of Key type (must be 7 for RSA)
+  #     Key type WITHOUT terminating NUL (must be ssh-rsa for RSA)
+  #     4 Byte Big-Endian length of public exponent e
+  #     Public exponent e integer bytes
+  #     4 Byte Big-Endian length of modulus n
+  #     Modulus n integer bytes
+  #   DSS:
+  #     4 Byte Big-Endian length of Key type (must be 7 for DSS)
+  #     Key type WITHOUT terminating NUL (must be ssh-dss for DSS)
+  #     4 Byte Big-Endian length of prime modulus p
+  #     Prime modulus p integer bytes
+  #     4 Byte Big-Endian length of prime q
+  #     Prime q integer bytes
+  #     4 Byte Big-Endian length of parameter g
+  #     Parameter g integer bytes
+  #     4 Byte Big-Endian length of public key y
+  #     Public key y integer bytes
+  # no extra trailing bytes are permitted
+  my $input = shift;
+  $input =~ s/((?:\r\n|\n|\r).*)$//os;
+  my @fields = split(' ', $input, 3);
+  return undef unless @fields >= 2;
+  my $data = decode_base64($fields[1]);
+  my $origData = $data;
+  my @parts = ();
+  while (length($data) >= 4) {
+    my $len = unpack('N',substr($data,0,4));
+    my $value = '';
+    if ($len > 0) {
+      return undef if $len + 4 > length($data);
+      $value = substr($data,4,$len);
+    }
+    push(@parts, $value);
+    substr($data, 0, 4+$len) = '';
+  }
+  return undef unless length($data) == 0;
+  return $parts[0] if @parts >= 1 && $parts[0] &&
+                              $parts[0] ne 'ssh-rsa' && $parts[0] ne 'ssh-dss';
+  if ($parts[0] eq 'ssh-rsa') {
+    return undef unless @parts == 3;
+    my $rsaEncryption = DEROID('1.2.840.113549.1.1.1'); # :rsaEncryption
+    $rsaEncryption = pack('C',0x30).DERLength(length($rsaEncryption)+2)
+      .$rsaEncryption.pack('C2',0x05,0x00);
+    my $pubrsa = PackUIntBytes($parts[2]); # modulus
+    $pubrsa .= PackUIntBytes($parts[1]); # exponent
+    $pubrsa = pack('C',0x30).DERLength(length($pubrsa)).$pubrsa;
+    my $id = sha1($pubrsa); # The id is the sha1 hash of the BIT STRING part
+    $pubrsa = pack('C',0x3).DERLength(length($pubrsa)+1).pack('C',0x0).$pubrsa;
+    $pubrsa = $rsaEncryption.$pubrsa;
+    $pubrsa = pack('C',0x30).DERLength(length($pubrsa)).$pubrsa;
+
+    my $bits = CountKeyBits($parts[2]);
+    return undef unless $bits;
+
+    my $rawexp = $parts[1];
+    my $exp;
+    if (length($rawexp) > 8) {
+      # Fudge the result because it's bigger than a 64-bit number
+      my $lastbyte = unpack('C',substr($rawexp,-1,1));
+      $exp = $lastbyte & 0x01 ? 65537 : 65536;
+    }
+    else {
+      $exp = 0;
+      while (length($rawexp)) {
+        $exp <<= 8;
+        $exp |= unpack('C',substr($rawexp,0,1));
+        substr($rawexp,0,1) = '';
+      }
+    }
+    my $cmnt = $fields[2]||'';
+    return
+      ('rsa',$bits,$exp,$id,md5($origData),sha1($origData),$cmnt,$pubrsa);
+  } else {
+    return undef unless @parts == 5;
+    my $dsaEncryption = DEROID('1.2.840.10040.4.1'); # :dsaEncryption
+    my $algparms = PackUIntBytes($parts[1]). # prime modulus p
+                   PackUIntBytes($parts[2]). # prime q
+                   PackUIntBytes($parts[3]); # parameter g
+    $algparms = pack('C',0x30).DERLength(length($algparms)).$algparms;
+    $dsaEncryption = pack('C',0x30).
+                     DERLength(length($dsaEncryption) + length($algparms)).
+                     $dsaEncryption.$algparms;
+    my $pubdsa = PackUIntBytes($parts[4]); # public key y
+    my $id = sha1($pubdsa); # The id is the sha1 hash of the BIT STRING part
+    $pubdsa = pack('C',0x3).DERLength(length($pubdsa)+1).pack('C',0x0).$pubdsa;
+    $pubdsa = $dsaEncryption.$pubdsa;
+    $pubdsa = pack('C',0x30).DERLength(length($pubdsa)).$pubdsa;
+
+    my $bits = CountKeyBits($parts[1]);
+    return undef unless $bits;
+
+    my $cmnt = $fields[2]||'';
+    return
+      ('dsa',$bits,undef,$id,md5($origData),sha1($origData),$cmnt,$pubdsa);
+  }
+}
+
+sub GetKeyInfo($)
+{
+  # Input is a X.509 PUBLIC KEY (RSA or DSS) in DER format
+  # Output is an array of:
+  #   key type (either 'rsa' or 'dsa')
+  #   how many bits in the modulus
+  #   the public exponent (undef if not RSA)
+  #   the key id
+  #   the OpenSSH md5 fingerprint
+  #   the OpenSSH sha1 fingerprint
+  #   the OpenSSH public key in .pub format
+  # or undef if the key is unparseable
+  #
+  # Expected format for an RSA public key is:
+  #   SEQUENCE {
+  #     SEQUENCE {
+  #       OBJECT IDENTIFIER :rsaEncryption = 1.2.840.113549.1.1.1
+  #       NULL
+  #     }
+  #     BIT STRING (primitive) {
+  #       0 unused bits
+  #       SEQUENCE { # this part is the contents of an "RSA PUBLIC KEY" file
+  #         INTEGER modulus n
+  #         INTEGER publicExponent e
+  #       }
+  #     }
+  #   }
+  #
+  # Expected format for a DSA public key is:
+  #   SEQUENCE {
+  #     SEQUENCE {
+  #       OBJECT IDENTIFIER :dsaEncryption = 1.2.840.10040.4.1
+  #       SEQUENCE {
+  #         INTEGER prime modulus p
+  #         INTEGER prime q
+  #         INTEGER parameter g
+  #       }
+  #     }
+  #     BIT STRING (primitive) {
+  #       0 unused bits
+  #       INTEGER public key y
+  #     }
+  #   }
+
+  no warnings;
+  my $der = shift;
+  my $rawmod;
+  my $rawexp;
+
+  return undef if unpack('C',substr($der,0,1)) != 0x30;
+  my ($len, $lenbytes) = ReadDERLength(substr($der,1));
+  return undef unless length($der) == 1 + $lenbytes + $len;
+  substr($der, 0, 1 + $lenbytes) = '';
+
+  return undef if unpack('C',substr($der,0,1)) != 0x30;
+  ($len, $lenbytes) = ReadDERLength(substr($der,1));
+  return undef unless length($der) >= 1 + $lenbytes + $len;
+  my $ident = substr($der, 1 + $lenbytes, $len);
+  substr($der, 0, 1 + $lenbytes + $len) = '';
+
+  return undef unless unpack('C',substr($ident,0,1)) == 0x06; # OID
+  ($len, $lenbytes) = ReadDERLength(substr($ident,1));
+  return undef unless length($ident) > 1 + $lenbytes + $len;
+  my $keytypeoid = substr($ident, 0, 1 + $lenbytes + $len);
+  substr($ident, 0, 1 + $lenbytes + $len) = '';
+
+  # $keytypeoid may be either rsaEncryption or dsaEncryption
+  my $rsaEncryption = DEROID('1.2.840.113549.1.1.1'); # :rsaEncryption
+  my $dsaEncryption = DEROID('1.2.840.10040.4.1'); # :dsaEncryption
+
+  return undef
+    unless $keytypeoid eq $rsaEncryption || $keytypeoid eq $dsaEncryption;
+
+  return undef if unpack('C',substr($der,0,1)) != 0x03;
+  ($len, $lenbytes) = ReadDERLength(substr($der,1));
+  return undef unless length($der) == 1 + $lenbytes + $len && $len >= 1;
+  return undef unless unpack('C',substr($der, 1 + $lenbytes, 1)) == 0x00;
+  substr($der, 0, 1 + $lenbytes + 1) = '';
+  my $id = sha1($der); # The id is the sha1 hash of the BIT STRING contents
+
+  if ($keytypeoid eq $rsaEncryption) {
+    return undef unless $ident eq pack('C2', 0x05, 0x00);
+
+    return undef if unpack('C',substr($der,0,1)) != 0x30;
+    ($len, $lenbytes) = ReadDERLength(substr($der,1));
+    return undef unless length($der) == 1 + $lenbytes + $len;
+    substr($der, 0, 1 + $lenbytes) = '';
+
+    return undef if unpack('C',substr($der,0,1)) != 0x02;
+    ($len, $lenbytes) = ReadDERLength(substr($der,1));
+    substr($der, 0, 1 + $lenbytes) = '';
+    my $derexp = substr($der, $len);
+    substr($der, $len) = '';
+    return undef unless $len >= 1;
+    $rawmod = $der;
+    my $bits = CountKeyBits($der);
+    return undef unless $bits;
+
+    $der = $derexp;
+    return undef if unpack('C',substr($der,0,1)) != 0x02;
+    ($len, $lenbytes) = ReadDERLength(substr($der,1));
+    substr($der, 0, 1 + $lenbytes) = '';
+    return undef unless length($der) == $len && $len >= 1;
+    return undef if unpack('C',substr($der,0,1)) & 0x80; # negative pub exp bad
+    $rawexp = $der;
+    my $exp;
+    if ($len > 8) {
+      # Fudge the result because it's bigger than a 64-bit number
+      my $lastbyte = unpack('C',substr($der,-1,1));
+      $exp = $lastbyte & 0x01 ? 65537 : 65536;
+    }
+    else {
+      $exp = 0;
+      while (length($der)) {
+        $exp <<= 8;
+        $exp |= unpack('C',substr($der,0,1));
+        substr($der,0,1) = '';
+      }
+    }
+
+    my $sshbin = pack('N',7)."ssh-rsa".pack('N',length($rawexp)).$rawexp
+      .pack('N',length($rawmod)).$rawmod;
+    my $sshpub = "ssh-rsa " . encode_base64($sshbin,'');
+
+    return ('rsa',$bits,$exp,$id,md5($sshbin),sha1($sshbin),$sshpub);
+
+  } else {
+    return undef unless unpack('C',substr($ident,0,1)) == 0x30;
+    ($len, $lenbytes) = ReadDERLength(substr($ident,1));
+    return undef unless length($ident) == 1 + $lenbytes + $len;
+    substr($ident, 0, 1 + $lenbytes) = '';
+
+    return undef unless unpack('C',substr($ident,0,1)) == 0x02;
+    ($len, $lenbytes) = ReadDERLength(substr($ident,1));
+    return undef unless length($ident) > 1 + $lenbytes + $len;
+    substr($ident, 0, 1 + $lenbytes) = '';
+    my $dsa_p = substr($ident, 0, $len);
+    substr($ident, 0, $len) = '';
+
+    return undef unless unpack('C',substr($ident,0,1)) == 0x02;
+    ($len, $lenbytes) = ReadDERLength(substr($ident,1));
+    return undef unless length($ident) > 1 + $lenbytes + $len;
+    substr($ident, 0, 1 + $lenbytes) = '';
+    my $dsa_q = substr($ident, 0, $len);
+    substr($ident, 0, $len) = '';
+
+    return undef unless unpack('C',substr($ident,0,1)) == 0x02;
+    ($len, $lenbytes) = ReadDERLength(substr($ident,1));
+    return undef unless length($ident) == 1 + $lenbytes + $len;
+    substr($ident, 0, 1 + $lenbytes) = '';
+    my $dsa_g = substr($ident, 0, $len);
+
+    return undef unless unpack('C',substr($der,0,1)) == 0x02;
+    ($len, $lenbytes) = ReadDERLength(substr($der,1));
+    return undef unless length($der) == 1 + $lenbytes + $len;
+    my $dsa_y = substr($der, 1 + $lenbytes, $len);
+
+    my $bits = CountKeyBits($dsa_p);
+    return undef unless $bits;
+
+    my $sshbin = pack('N',7)."ssh-dss".pack('N',length($dsa_p)).$dsa_p
+      .pack('N',length($dsa_q)).$dsa_q.pack('N',length($dsa_g)).$dsa_g
+      .pack('N',length($dsa_y)).$dsa_y;
+    my $sshpub = "ssh-dss " . encode_base64($sshbin,'');
+
+    return ('dsa',$bits,undef,$id,md5($sshbin),sha1($sshbin),$sshpub);
+  }
+}
+
+sub BreakLine($$)
+{
+  my ($line,$width) = @_;
+  my @ans = ();
+  return $line if $width < 1;
+  while (length($line) > $width) {
+    push(@ans, substr($line, 0, $width));
+    substr($line, 0, $width) = '';
+  }
+  push(@ans, $line) if length($line);
+  return @ans;
+}
+
+sub main
+{
+  my $help = '';
+  my $verbose = '';
+  my $quiet = '';
+  my $termOK = '';
+  my $debug = 0;
+  my $pubx509 = '';
+  my $check = '';
+  my $format = undef;
+  my $infile = '-';
+  my $outfile = '-';
+
+  #tests;
+  eval {GetOptions(
+      "help|h" => sub{$help=1;die"!FINISH"},
+      "verbose|v" => \$verbose,
+      "version|V" => sub{print STDERR $VERSIONMSG;exit(0)},
+      "debug" => \$debug,
+      "quiet" => \$quiet,
+      "pubx509" => \$pubx509,
+      "pubX509" => \$pubx509,
+      "check" => \$check,
+      "t" => \$termOK,
+      "format=s" => \$format,
+      "infile|c=s" => \$infile,
+      "outfile|c=s" => \$outfile
+    )} || $help
+      or die $USAGE;
+  if ($help) {
+    local *MAN;
+    my $pager = $ENV{'PAGER'} || 'less';
+    if (-t STDOUT && open(MAN, "|-", $pager)) {
+      print MAN formatman($HELP,1);
+      close(MAN);
+    }
+    else {
+      print formatman($HELP);
+    }
+    exit(0);
+  }
+  die "--in requires a filename\n" if !$infile;
+  die "--out requires a filename\n" if !$outfile;
+  if (defined($format)) {
+    $format = lc($format);
+    die "--format argument must be 'ssh', 'pem' or 'der'\n"
+      if $format ne 'ssh' && $format ne 'pem' && $format ne 'der';
+  }
+  $verbose = 1 if $debug || $check;
+  print STDERR $VERSIONMSG if $verbose;
+  my $keytype = 'OpenSSH';
+  $keytype = 'X.509' if $pubx509;
+  die "Standard input is a tty (which is an unlikely source of a "
+    . "public key)\n"
+    . "If that's what you truly meant, add the -t option to allow it.\n"
+    if $infile eq '-' && -t STDIN && !$termOK;
+  my $opensshdotpub;
+  my $infilename;
+  {
+    local $/ if $pubx509;
+    my $input;
+    if ($infile ne '-') {
+      $infilename = "\"$infile\"";
+      open($input, '<', $infile)
+        or die "Cannot open $infilename for input: $!\n";
+    } else {
+      $input = *STDIN;
+      $infilename = 'standard input';
+    }
+    !!($opensshdotpub = <$input>)
+      or die "Cannot read $keytype public key from $infilename\n";
+    if (!$pubx509) {
+      my $auto509 = 0;
+      if ($opensshdotpub =~ /^----[- ]BEGIN PUBLIC KEY[- ]----/) {
+        $auto509 = 1;
+      }
+      else {
+        my $input = $opensshdotpub;
+        $input =~ s/((?:\r\n|\n|\r).*)$//os;
+        my @fields = split(' ', $input, 3);
+        if (@fields < 2 ||
+            length($fields[1]) < 16 ||
+            $fields[1] !~ m|^[0-9A-Za-z+/=]+$|) {
+          $auto509 = 1;
+        }
+      }
+      if ($auto509) {
+        $pubx509 = 1;
+        $keytype = 'X.509';
+        print STDERR "auto detected --pubx509 option\n" if $debug;
+        local $/;
+        my $extra = <$input>;
+        $opensshdotpub .= $extra if $extra;
+      }
+    }
+    close($input) if $infile ne '-';
+  }
+
+  my ($kk, $sshkeybits, $sshkeyexp, $sshkeyid, $sfmd5, $sfsha1, $sshcmnt);
+  my ($opensshpub, $dotpub);
+  if ($pubx509) {
+    my $inform =
+      ($opensshdotpub =~ m|^[\t\n\r\x20-\x7E\x80-\xFF]*$|os) ? 'PEM' : 'DER';
+    print STDERR "pubx509 -inform $inform\n" if $debug;
+    my $bin = 1;
+    if ($inform eq 'PEM') {
+      $opensshpub = $opensshdotpub;
+      if ($opensshpub =~ /^----[- ]BEGIN/m) {
+        $opensshpub = "\n".$opensshpub."\n";
+        $opensshpub =~ s/\A.*?\n----[- ]BEGIN[^\n]*\n//s;
+        $opensshpub =~ s/\n----[- ]END[^\n]*\n.*\z//s;
+        $opensshpub =~ tr/[ \t\r\n]//d;
+        $bin = 0;
+      } elsif ($opensshpub =~ m,\A[\t\r\n A-Za-z0-9+/=]*\z,s) {
+        $opensshpub =~ tr/[ \t\r\n]//d;
+        $bin = 0;
+      }
+    } else {
+      $opensshpub = $opensshdotpub;
+    }
+    print STDERR "BASE64 X509: $opensshpub\n" if !$bin && $debug;
+    $opensshpub = decode_base64($opensshpub) if !$bin;
+    print STDERR "HEX X509: ", unpack('H*', $opensshpub), "\n" if $debug;
+    $sshcmnt = undef;
+    ($kk,$sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$dotpub) =
+      GetKeyInfo($opensshpub);
+    die "Unparseable X.509 public key format read from $infilename\n"
+      unless $sshkeybits;
+    ($kk,$sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub) =
+      GetOpenSSHKeyInfo($dotpub);
+  } else {
+    ($kk,$sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub) =
+      GetOpenSSHKeyInfo($opensshdotpub);
+    die "Unparseable OpenSSH public key read from $infilename\n"
+      unless $sshkeybits;
+    ($kk,$sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$dotpub) =
+      GetKeyInfo($opensshpub);
+  }
+  my $keykind = uc($kk);
+  printf STDERR "$keytype $keykind Public Key Info:\n".
+      "  bits=$sshkeybits%s\n", $sshkeyexp?" pubexp=$sshkeyexp":'' if $verbose;
+  print STDERR "  keyid=",
+    join(":", uc(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
+  print STDERR "  fingerprint(md5)=",
+    join(":", lc(unpack("H*",$sfmd5))=~/../g), "\n" if $verbose;
+  print STDERR "  fingerprint(sha1)=",
+    join(":", lc(unpack("H*",$sfsha1))=~/../g), "\n" if $verbose;
+  print STDERR "  comment=",$sshcmnt||'<none present>',"\n"
+    if $verbose && !$pubx509;
+  die "*** Error: $keytype key has less than 512 bits ($sshkeybits)\n"
+    . "***        You might as well just donate your system to hackers now.\n"
+    if $sshkeybits < 512;
+  die "*** Error: The $keytype key's public exponent is even ($sshkeyexp)!\n"
+    if $sshkeyexp && !($sshkeyexp & 0x01);
+  warn "*** Warning: The $keytype key has less than 2048 bits ($sshkeybits), "
+    . "continuing anyway\n" if !$quiet && $sshkeybits < 2048;
+  die "*** Error: The $keytype public key's exponent of $sshkeyexp is "
+    . "unacceptably weak!\n"
+    if $sshkeyexp && $sshkeyexp < 35; # OpenSSH used 35 until v5.4
+  warn "*** Warning: The $keytype public key's exponent ($sshkeyexp) is weak "
+    . "(< 65537), continuing anyway\n"
+    if !$quiet && $sshkeyexp && $sshkeyexp < 65537;
+
+  return 0 if $check;
+
+  if (!defined($format)) {
+    $format = $pubx509 ? 'ssh' : 'pem';
+  }
+
+  my $output;
+  if ($outfile ne '-') {
+    open($output, ">", $outfile)
+      or die "Cannot open \"$outfile\" for output: $!\n";
+  } else {
+    $output = *STDOUT;
+  }
+
+  if ($format eq 'ssh') {
+    my $cmnt = '';
+    $cmnt = ' ' . join(' ', @ARGV) if @ARGV;
+    print $output $dotpub, $cmnt, "\n";
+  } elsif ($format eq 'der') {
+    print $output $opensshpub;
+  } else {
+    my $base64 = join("\n", BreakLine(encode_base64($opensshpub, ''), 64))."\n";
+    print $output "-----BEGIN PUBLIC KEY-----\n",
+                  $base64,
+                  "-----END PUBLIC KEY-----\n";
+  }
+
+  close($output) if $outfile ne '-';
+  return 0;
+}

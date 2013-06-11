@@ -20,6 +20,9 @@ certificates).  If more detail is needed on the veritable plethora
 of options available when running the CACreateCert utility, look
 at the output of the CACreateCert -h command.
 
+A ConvertPubKey utility is also provided that can convert between
+OpenSSH and X.509 public key formats without using OpenSSH or OpenSSL.
+
 This software is licensed under the GNU Affero General Public License
 as published by the Free Software Foundation, either version 3 of
 the License, or (at your option) any later version.  See the included
