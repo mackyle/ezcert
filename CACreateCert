@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.9';
+  *VERSION = \'1.2.10';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -1195,7 +1195,6 @@ sub main
   if (!$root) {
     local $/ if $pubx509;
     my $input;
-    my $infilename;
     if ($infile ne '-') {
       $infilename = "\"$infile\"";
       open($input, '<', $infile)
