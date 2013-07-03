@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.10';
+  *VERSION = \'1.2.11';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -323,7 +323,9 @@ OPTIONS
               Primarily intended to be used when generating client certificates,
               if this option is given, then the entire contents of suffix.pem is
               written to the same location as the generated certificate
-              immediately following the certificate.
+              immediately following the certificate.  This option may be given
+              more than once in which case the files will be appended to the
+              output in the order the --suffix options were given.
 
 NOTES
        All systems support sha1 digest certificates, but sha1 should really not
@@ -1116,7 +1118,7 @@ sub main
   my $noExpiry = pack('C',0x18).DERLength(15)."99991231235959Z";
   my $infile = '-';
   my $outfile = '-';
-  my $suffixfile = undef;
+  my @suffixfiles = ();
   my $suffix = '';
 
   #tests;
@@ -1146,9 +1148,9 @@ sub main
       "key|k=s" => \$keyfile,
       "cert|c=s" => \$certfile,
       "pathlen=i" => \$pathlen,
-      "infile|c=s" => \$infile,
-      "outfile|c=s" => \$outfile,
-      "suffixfile|c=s" => \$suffixfile
+      "in|c=s" => \$infile,
+      "out|c=s" => \$outfile,
+      "suffix|c=s" => sub{push(@suffixfiles, $_[1]);}
     )} || $help
       or die $USAGE;
   if ($help) {
@@ -1165,7 +1167,11 @@ sub main
   }
   die "--in requires a filename\n" if !$root && !$infile;
   die "--out requires a filename\n" if !$outfile;
-  die "--suffix requires a filename\n" if defined($suffixfile) && !$suffixfile;
+  foreach my $suffixfile (@suffixfiles) {
+    die "--suffix requires a filename\n" if defined($suffixfile) && !$suffixfile;
+    die "--suffix file '$suffixfile' does not exist or is not readable\n"
+      if ! -e $suffixfile || ! -r $suffixfile;
+  }
   $client = 1 if
     !$root && !$subca && !$server && !$codesign && !$applecodesign && !$email;
   $verbose = 1 if $debug || $check;
@@ -1185,11 +1191,11 @@ sub main
     unless $check || $ARGV[0] || ($root && $useRandom);
   my $opensshdotpub;
   my $infilename;
-  if ($suffixfile) {
+  foreach my $suffixfile (@suffixfiles) {
     open(SUFFIX, '<', $suffixfile)
-      or die "Cannot open $suffixfile for input: $!\n";
+      or die "Cannot open '$suffixfile' for input: $!\n";
     local $/;
-    $suffix = <SUFFIX>;
+    $suffix .= <SUFFIX>;
     close(SUFFIX);
   }
   if (!$root) {
