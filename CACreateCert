@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.12';
+  *VERSION = \'1.2.13';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -1167,9 +1167,9 @@ sub main
       "key|k=s" => \$keyfile,
       "cert|c=s" => \$certfile,
       "pathlen=i" => \$pathlen,
-      "in|c=s" => \$infile,
-      "out|c=s" => \$outfile,
-      "suffix|c=s" => sub{push(@suffixfiles, $_[1]);},
+      "in=s" => \$infile,
+      "out=s" => \$outfile,
+      "suffix=s" => sub{push(@suffixfiles, $_[1]);},
       "dnq=s" => \$qualifier
     )} || $help
       or die $USAGE;

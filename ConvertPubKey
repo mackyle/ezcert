@@ -35,7 +35,7 @@ my $HELP;
 my $USAGE;
 
 BEGIN {
-  *VERSION = \'1.0';
+  *VERSION = \'1.0.1';
   $VERSIONMSG = "ConvertPubKey version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -640,8 +640,8 @@ sub main
       "check" => \$check,
       "t" => \$termOK,
       "format=s" => \$format,
-      "infile|c=s" => \$infile,
-      "outfile|c=s" => \$outfile
+      "in=s" => \$infile,
+      "out=s" => \$outfile
     )} || $help
       or die $USAGE;
   if ($help) {
