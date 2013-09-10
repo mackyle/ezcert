@@ -35,7 +35,7 @@ my $HELP;
 my $USAGE;
 
 BEGIN {
-  *VERSION = \'1.0.1';
+  *VERSION = \'1.0.2';
   $VERSIONMSG = "ConvertPubKey version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -321,7 +321,7 @@ sub GetOpenSSHKeyInfo($)
   # Output is an array of:
   #   key type (either 'rsa' or 'dsa')
   #   how many bits in the modulus
-  #   the public exponent (undef if not RSA)
+  #   the public exponent (if RSA) or how many bits in prime divisor (if DSA)
   #   the key id
   #   the OpenSSH md5 fingerprint
   #   the OpenSSH sha1 fingerprint
@@ -347,8 +347,8 @@ sub GetOpenSSHKeyInfo($)
   #     Key type WITHOUT terminating NUL (must be ssh-dss for DSS)
   #     4 Byte Big-Endian length of prime modulus p
   #     Prime modulus p integer bytes
-  #     4 Byte Big-Endian length of prime q
-  #     Prime q integer bytes
+  #     4 Byte Big-Endian length of prime divisor q
+  #     Prime divisor q integer bytes
   #     4 Byte Big-Endian length of parameter g
   #     Parameter g integer bytes
   #     4 Byte Big-Endian length of public key y
@@ -412,7 +412,7 @@ sub GetOpenSSHKeyInfo($)
     return undef unless @parts == 5;
     my $dsaEncryption = DEROID('1.2.840.10040.4.1'); # :dsaEncryption
     my $algparms = PackUIntBytes($parts[1]). # prime modulus p
-                   PackUIntBytes($parts[2]). # prime q
+                   PackUIntBytes($parts[2]). # prime divisor q
                    PackUIntBytes($parts[3]); # parameter g
     $algparms = pack('C',0x30).DERLength(length($algparms)).$algparms;
     $dsaEncryption = pack('C',0x30).
@@ -426,10 +426,12 @@ sub GetOpenSSHKeyInfo($)
 
     my $bits = CountKeyBits($parts[1]);
     return undef unless $bits;
+    my $divsiz = CountKeyBits($parts[2]);
+    return undef unless $divsiz;
 
     my $cmnt = $fields[2]||'';
     return
-      ('dsa',$bits,undef,$id,md5($origData),sha1($origData),$cmnt,$pubdsa);
+      ('dsa',$bits,$divsiz,$id,md5($origData),sha1($origData),$cmnt,$pubdsa);
   }
 }
 
@@ -439,7 +441,7 @@ sub GetKeyInfo($)
   # Output is an array of:
   #   key type (either 'rsa' or 'dsa')
   #   how many bits in the modulus
-  #   the public exponent (undef if not RSA)
+  #   the public exponent (if RSA) or how many bits in prime divisor (if DSA)
   #   the key id
   #   the OpenSSH md5 fingerprint
   #   the OpenSSH sha1 fingerprint
@@ -467,7 +469,7 @@ sub GetKeyInfo($)
   #       OBJECT IDENTIFIER :dsaEncryption = 1.2.840.10040.4.1
   #       SEQUENCE {
   #         INTEGER prime modulus p
-  #         INTEGER prime q
+  #         INTEGER prime divisor q
   #         INTEGER parameter g
   #       }
   #     }
@@ -592,13 +594,15 @@ sub GetKeyInfo($)
 
     my $bits = CountKeyBits($dsa_p);
     return undef unless $bits;
+    my $divsiz = CountKeyBits($dsa_q);
+    return undef unless $divsiz;
 
     my $sshbin = pack('N',7)."ssh-dss".pack('N',length($dsa_p)).$dsa_p
       .pack('N',length($dsa_q)).$dsa_q.pack('N',length($dsa_g)).$dsa_g
       .pack('N',length($dsa_y)).$dsa_y;
     my $sshpub = "ssh-dss " . encode_base64($sshbin,'');
 
-    return ('dsa',$bits,undef,$id,md5($sshbin),sha1($sshbin),$sshpub);
+    return ('dsa',$bits,$divsiz,$id,md5($sshbin),sha1($sshbin),$sshpub);
   }
 }
 
@@ -755,7 +759,7 @@ sub main
   }
   my $keykind = uc($kk);
   printf STDERR "$keytype $keykind Public Key Info:\n".
-      "  bits=$sshkeybits%s\n", $sshkeyexp?" pubexp=$sshkeyexp":'' if $verbose;
+      "  bits=$sshkeybits %s=$sshkeyexp\n", $kk eq 'rsa'?"pubexp":"divsiz" if $verbose;
   print STDERR "  keyid=",
     join(":", uc(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
   print STDERR "  fingerprint(md5)=",
@@ -768,15 +772,26 @@ sub main
     . "***        You might as well just donate your system to hackers now.\n"
     if $sshkeybits < 512;
   die "*** Error: The $keytype key's public exponent is even ($sshkeyexp)!\n"
-    if $sshkeyexp && !($sshkeyexp & 0x01);
+    if $kk eq 'rsa' && $sshkeyexp && !($sshkeyexp & 0x01);
   warn "*** Warning: The $keytype key has less than 2048 bits ($sshkeybits), "
     . "continuing anyway\n" if !$quiet && $sshkeybits < 2048;
   die "*** Error: The $keytype public key's exponent of $sshkeyexp is "
     . "unacceptably weak!\n"
-    if $sshkeyexp && $sshkeyexp < 35; # OpenSSH used 35 until v5.4
+    if $kk eq 'rsa' && $sshkeyexp && $sshkeyexp < 35; # OpenSSH used 35 until v5.4
   warn "*** Warning: The $keytype public key's exponent ($sshkeyexp) is weak "
     . "(< 65537), continuing anyway\n"
-    if !$quiet && $sshkeyexp && $sshkeyexp < 65537;
+    if !$quiet && $kk eq 'rsa' && $sshkeyexp && $sshkeyexp < 65537;
+  warn "*** Warning: The $keytype public key's prime divisor bit size "
+    . "($sshkeyexp) is weak (< 160), continuing anyway\n"
+    if !$quiet && $kk eq 'dsa' &&
+       $sshkeybits >= 1024 && $sshkeybits < 2048 && $sshkeyexp < 160;
+  warn "*** Warning: The $keytype public key's prime divisor bit size "
+    . "($sshkeyexp) is weak (< 224), continuing anyway\n"
+    if !$quiet && $kk eq 'dsa' &&
+       $sshkeybits >= 2048 && $sshkeybits < 3072 && $sshkeyexp < 224;
+  warn "*** Warning: The $keytype public key's prime divisor bit size "
+    . "($sshkeyexp) is weak (< 256), continuing anyway\n"
+    if !$quiet && $kk eq 'dsa' && $sshkeybits >= 3072 && $sshkeyexp < 256;
 
   return 0 if $check;
 
