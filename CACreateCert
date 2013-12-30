@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.13';
+  *VERSION = \'1.2.14';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -340,7 +340,7 @@ OPTIONS
               effect in which case it will be embedded as a user id (UID) or
               when --email is in effect in which case it will be embedded as
               an email address in both the subject and subject alternative name.
-              The "name string" value may never be omitted by may be explictly
+              The "name string" value may never be omitted but may be explictly
               given as the empty string ('' or "") when generating a root
               certificate using a random serial number.
 
