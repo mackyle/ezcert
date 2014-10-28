@@ -1,7 +1,7 @@
 #!/usr/bin/perl
 
 # ConvertPubKey - Convert public keys to/from OpenSSH/X509 format
-# Copyright (c) 2011,2012,2013 Kyle J. McKay.  All rights reserved.
+# Copyright (c) 2011,2012,2013,2014 Kyle J. McKay.  All rights reserved.
 
 # *** See detailed help starting around line 80 ***
 
@@ -35,9 +35,9 @@ my $HELP;
 my $USAGE;
 
 BEGIN {
-  *VERSION = \'1.0.2';
+  *VERSION = \'1.0.3';
   $VERSIONMSG = "ConvertPubKey version $VERSION\n" .
-    "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
+    "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
     "http://gnu.org/licenses/agpl.html\n" .
     "This is free software: you are free to change and redistribute it.\n" .
@@ -606,6 +606,39 @@ sub GetKeyInfo($)
   }
 }
 
+my %rsadsa_known_strengths;
+BEGIN {
+  %rsadsa_known_strengths = (
+    1024 => 80,
+    2048 => 112,
+    3072 => 128,
+    7680 => 192,
+    15360 => 256,
+  );
+}
+
+sub compute_rsadsa_strength($)
+{
+  my $rsadsabits = shift;
+  return 0 unless $rsadsabits && $rsadsabits > 0;
+  return $rsadsa_known_strengths{$rsadsabits} if $rsadsa_known_strengths{$rsadsabits};
+  my $guess;
+  if ($rsadsabits < 1024) {
+    $guess = 80 * sqrt($rsadsabits/1024);
+  } elsif ($rsadsabits > 15360) {
+    $guess = 256 * sqrt($rsadsabits/15360);
+  } else {
+    $guess = 34.141 + sqrt(34.141*34.141 - 4*0.344*(1554.7-$rsadsabits));
+    $guess = $guess / (2 * 0.344);
+  }
+  $guess = 79 if $rsadsabits < 1024 && $guess >= 80;
+  $guess = 111 if $rsadsabits > 1024 && $rsadsabits < 2048 && $guess >= 112;
+  $guess = 127 if $rsadsabits > 2048 && $rsadsabits < 3072 && $guess >= 128;
+  $guess = 191 if $rsadsabits > 3072 && $rsadsabits < 7680 && $guess >= 192;
+  $guess = 255 if $rsadsabits > 7680 && $rsadsabits < 15360 && $guess >= 256;
+  return int($guess) . ' (approximately)';
+}
+
 sub BreakLine($$)
 {
   my ($line,$width) = @_;
@@ -758,8 +791,12 @@ sub main
       GetKeyInfo($opensshpub);
   }
   my $keykind = uc($kk);
-  printf STDERR "$keytype $keykind Public Key Info:\n".
-      "  bits=$sshkeybits %s=$sshkeyexp\n", $kk eq 'rsa'?"pubexp":"divsiz" if $verbose;
+  if ($verbose) {
+    my $strength = compute_rsadsa_strength($sshkeybits);
+    printf STDERR "$keytype $keykind Public Key Info:\n".
+      "  bits=$sshkeybits %s=$sshkeyexp %s\n", $kk eq 'rsa'?"pubexp":"divsiz",
+      "secstrength=$strength";
+  }
   print STDERR "  keyid=",
     join(":", uc(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
   print STDERR "  fingerprint(md5)=",
