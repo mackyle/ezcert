@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.15';
+  *VERSION = \'1.2.16';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -106,7 +106,8 @@ Usage: CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
          [--root | --subca | --server | --codesign | --applecodesign | --email]
          [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pub_key_file] [--out out_cert.pem]
-         --key priv_key_file [--cert signing_cert] [--dnq "qual"] "name string"
+         [--cert signing_cert] [--dns "name-or-ip"] [--dnq "qual"]
+         --key priv_key_file "name string"
 USAGE
   $HELP = <<HELP;
 NAME
@@ -118,7 +119,8 @@ SYNOPSIS
          [--root | --subca | --server | --codesign | --applecodesign | --email]
          [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pubkeyfile] [--out pemcertfile]
-         --key priv_key_file [--cert signing_cert] [--dnq "qual"] "name string"
+         [--cert signing_cert] [--dns "name-or-ip"] [--dnq "qual"]
+         --key priv_key_file "name string"
        CACreateCert --root [--random] --key priv_key_file "name string" > ca.pem
        CACreateCert --key priv_key_file --cert signing_cert "name string"
          < pub_key_file > out_cert.pem
@@ -327,6 +329,19 @@ OPTIONS
               more than once in which case the files will be appended to the
               output in the order the --suffix options were given.
 
+       --dns domain-name-or-ip
+              Ignored unless --server given.  Adds the given domain-name-or-ip
+              as a subject alternative name (either DNS or IPAddress).  May
+              be repeated to add multiple alternative names.  A DNS name must
+              satisfy RFC 1034 section 3.5 as modified by RFC 1123 section 2.1
+              except that the leftmost label may be the single character '*'.
+              An IP address may be either IPv4 or IPv6 (do NOT use surrounding
+              '[', ']' characters on an IPv6 address). An IPv6 address MUST NOT
+              have a scope identifier.  Note that when --server is given, the
+              common name (CN) value is NOT automatically added as a subject
+              alternative name -- it must be specified explicitly with a --dns
+              option if that is desired (and normally it IS desirable).
+
        --dnq qual
               Optional for all certificate types.  If given must not be the
               empty string.  Will be embedded into the subject's distinguished
@@ -371,6 +386,12 @@ TIPS
        Display the currently available version of OpenSSH with:
 
            ssh -V
+
+BUGS
+       The ability to create self-signed types other than --root by combining
+       the --root option with one of the others (e.g. --client, --email,
+       --codesign, --server) is poorly documented.
+
 HELP
 }
 
@@ -1142,6 +1163,100 @@ sub compute_rsa_strength($)
   return (int($guess),1);
 }
 
+sub is_ipv4($)
+{
+  my $octet = '(?:\d|[1-9]\d|1\d{2}|2[0-4]\d|25[0-5])';
+  return $_[0] =~ /^$octet\.$octet\.$octet\.$octet$/o;
+}
+
+# 1-8 groups of 1-4 hex digits separated by ':' except that the groups may be
+# divided into two and separated by '::' instead and finally the last two
+# groups may be specified using IPv4 notation.  No scope allowed.
+sub parseipv6($)
+{
+  my $a = shift;
+  return undef unless $a =~ /^[:0-9a-fA-F.]+$/;
+  my $two = 0;
+  my @group1 = ();
+  my @group2 = ();
+  if ($a =~ /^(.*)::(.*)$/) {
+    @group1 = split(/:/, $1) if $1;
+    @group2 = split(/:/, $2) if $2;
+    $two = 1;
+  } else {
+    @group2 = split(/:/, $a);
+  }
+  if (@group2 && is_ipv4($group2[@group2 - 1])) {
+    my @ipv4 = split(/\./, pop(@group2));
+    push(@group2, sprintf("%x", ($ipv4[0] << 8) | $ipv4[1]));
+    push(@group2, sprintf("%x", ($ipv4[2] << 8) | $ipv4[3]));
+  }
+  return undef unless @group1 + @group2 >= 1 && @group1 + @group2 <= 8;
+  return undef if $two && @group1 + @group2 >= 8;
+  if ($two) {
+    my $zcomps = 8 - (@group1 + @group2);
+    for (my $i=0; $i < $zcomps; ++$i) {
+      push(@group1, 0);
+    }
+  }
+  my $ans = '';
+  foreach my $comp (@group1,@group2) {
+    return undef unless $comp =~ /^[0-9a-fA-F]{1,4}$/;
+    $ans .= pack('n', hex($comp));
+  }
+  return $ans;
+}
+
+sub parseip($)
+{
+  my $a = shift;
+  if (is_ipv4($a)) {
+    return pack('CCCC', split(/\./, $a, 4));
+  } else {
+    return parseipv6($a);
+  }
+}
+
+# See these RFCs:
+#   RFC 1034 section 3.5
+#   RFC 1123 section 2.1
+#   RFC 1738 section 3.1
+#   RFC 3986 section 3.2.2
+sub is_dns_valid($)
+{
+  my $dns = shift;
+  defined($dns) or $dns = '';
+  return 0 if $dns eq '' || $dns =~ /\s/;
+  my @labels = split(/\./, $dns, -1);
+  # Check each label
+  my $i = -1;
+  foreach my $label (@labels) {
+    ++$i;
+    return 0 unless length($label) > 0 && length($label) <= 63;
+    return 0 unless $label =~ /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/ ||
+                              ($i == 0 && $label eq '*' && @labels > 1);
+  }
+  return 0 unless length($dns) <= 255;
+  return 1;
+}
+
+sub handle_dns_opt($$)
+{
+  my $val = shift;
+  my $altsref = shift;
+  my $ip = parseip($val);
+  if (defined($ip)) {
+    die "Internal error: parsed IP not 4 or 16 bytes long"
+      unless length($ip) == 4 || length($ip) == 16;
+    push(@$altsref, [0x87, $ip]);
+  } else {
+    $val =~ s/\.$//;
+    die "Not a valid dns name or IPv4/IPv6 address: $val\n"
+      unless is_dns_valid($val);
+    push(@$altsref, [0x82, $val]);
+  }
+}
+
 sub main
 {
   Make1252(); # Set up the UTF-8 auxiliary conversion table
@@ -1156,6 +1271,7 @@ sub main
   my $useNoRandom = '';
   my $termOK = '';
   my $server = '';
+  my @serverAltNames = ();
   my $codesign = '';
   my $applecodesign = '';
   my $client = '';
@@ -1226,7 +1342,8 @@ sub main
       "in=s" => \$infile,
       "out=s" => \$outfile,
       "suffix=s" => sub{push(@suffixfiles, $_[1]);},
-      "dnq=s" => \$qualifier
+      "dnq=s" => \$qualifier,
+      "dns=s" => sub{handle_dns_opt($_[1], \@serverAltNames);}
     )} || $help
       or die $USAGE;
   if ($help) {
@@ -1592,9 +1709,17 @@ sub main
     $extAuthKey = pack('C',0x30).DERLength(length($extAuthKey)).$extAuthKey;
   }
   my $exts = $extCAVal . $extKeyUse . $extXKeyUse . $extSubjKey . $extAuthKey;
-  if ($email) {
-    my $extSubjAlt = MakeUTF8($ARGV[0]);
-    $extSubjAlt = pack('C',0x81).DERLength(length($extSubjAlt)).$extSubjAlt;
+  if ($email || ($server && @serverAltNames)) {
+    my $extSubjAlt;
+    if ($email) {
+      $extSubjAlt = MakeUTF8($ARGV[0]);
+      $extSubjAlt = pack('C',0x81).DERLength(length($extSubjAlt)).$extSubjAlt;
+    } else {
+      $extSubjAlt = '';
+      foreach my $alt (@serverAltNames) {
+        $extSubjAlt .= pack('C',$$alt[0]).DERLength(length($$alt[1])).$$alt[1];
+      }
+    }
     $extSubjAlt = pack('C',0x30).DERLength(length($extSubjAlt)).$extSubjAlt;
     $extSubjAlt = pack('C',0x04).DERLength(length($extSubjAlt)).$extSubjAlt;
     $extSubjAlt = $subjAltName . $extSubjAlt; # not crit unless empty DN
