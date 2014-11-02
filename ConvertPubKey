@@ -35,7 +35,7 @@ my $HELP;
 my $USAGE;
 
 BEGIN {
-  *VERSION = \'1.0.3';
+  *VERSION = \'1.0.4';
   $VERSIONMSG = "ConvertPubKey version $VERSION\n" .
     "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -632,10 +632,15 @@ sub compute_rsadsa_strength($)
     $guess = $guess / (2 * 0.344);
   }
   $guess = 79 if $rsadsabits < 1024 && $guess >= 80;
+  $guess = 80 if $rsadsabits > 1024 && $guess < 80;
   $guess = 111 if $rsadsabits > 1024 && $rsadsabits < 2048 && $guess >= 112;
+  $guess = 112 if $rsadsabits > 2048 && $guess < 112;
   $guess = 127 if $rsadsabits > 2048 && $rsadsabits < 3072 && $guess >= 128;
+  $guess = 128 if $rsadsabits > 3072 && $guess < 128;
   $guess = 191 if $rsadsabits > 3072 && $rsadsabits < 7680 && $guess >= 192;
+  $guess = 192 if $rsadsabits > 7680 && $guess < 192;
   $guess = 255 if $rsadsabits > 7680 && $rsadsabits < 15360 && $guess >= 256;
+  $guess = 256 if $rsadsabits > 15360 && $guess < 256;
   return int($guess) . ' (approximately)';
 }
 
