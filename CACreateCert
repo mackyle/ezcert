@@ -35,9 +35,9 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.14';
+  *VERSION = \'1.2.15';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
-    "Copyright (c) 2011-2013 Kyle J. McKay.  All rights reserved.\n" .
+    "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
     "http://gnu.org/licenses/agpl.html\n" .
     "This is free software: you are free to change and redistribute it.\n" .
@@ -1049,6 +1049,24 @@ sub GetDigest($)
   return ($h,$oid,$func);
 }
 
+sub GetDigestStrength($)
+{
+  return 80 if $_[0] eq 'sha1';
+  return 112 if $_[0] eq 'sha224';
+  return 128 if $_[0] eq 'sha256';
+  return 192 if $_[0] eq 'sha384';
+  return 256 if $_[0] eq 'sha512';
+}
+
+sub GetDigestNameForBits($)
+{
+  return 'sha1' if $_[0] <= 80;
+  return 'sha224' if $_[0] <= 112;
+  return 'sha256' if $_[0] <= 128;
+  return 'sha384' if $_[0] <= 192;
+  return 'sha512';
+}
+
 sub toupper($)
 {
   my $str = shift;
@@ -1084,6 +1102,44 @@ sub RSASign($$)
     #open(STDERR, ">&", $olderr) or die "Cannot dup \$olderr: $!";
   }
   return $sig;
+}
+
+my %rsadsa_known_strengths;
+BEGIN {
+  %rsadsa_known_strengths = (
+    1024 => 80,
+    2048 => 112,
+    3072 => 128,
+    7680 => 192,
+    15360 => 256,
+  );
+}
+
+sub compute_rsa_strength($)
+{
+  my $rsadsabits = shift;
+  return 0 unless $rsadsabits && $rsadsabits > 0;
+  return ($rsadsa_known_strengths{$rsadsabits},'') if $rsadsa_known_strengths{$rsadsabits};
+  my $guess;
+  if ($rsadsabits < 1024) {
+    $guess = 80 * sqrt($rsadsabits/1024);
+  } elsif ($rsadsabits > 15360) {
+    $guess = 256 * sqrt($rsadsabits/15360);
+  } else {
+    $guess = 34.141 + sqrt(34.141*34.141 - 4*0.344*(1554.7-$rsadsabits));
+    $guess = $guess / (2 * 0.344);
+  }
+  $guess = 79 if $rsadsabits < 1024 && $guess >= 80;
+  $guess = 80 if $rsadsabits > 1024 && $guess < 80;
+  $guess = 111 if $rsadsabits > 1024 && $rsadsabits < 2048 && $guess >= 112;
+  $guess = 112 if $rsadsabits > 2048 && $guess < 112;
+  $guess = 127 if $rsadsabits > 2048 && $rsadsabits < 3072 && $guess >= 128;
+  $guess = 128 if $rsadsabits > 3072 && $guess < 128;
+  $guess = 191 if $rsadsabits > 3072 && $rsadsabits < 7680 && $guess >= 192;
+  $guess = 192 if $rsadsabits > 7680 && $guess < 192;
+  $guess = 255 if $rsadsabits > 7680 && $rsadsabits < 15360 && $guess >= 256;
+  $guess = 256 if $rsadsabits > 15360 && $guess < 256;
+  return (int($guess),1);
 }
 
 sub main
@@ -1263,14 +1319,6 @@ sub main
   }
   die "Cannot read key file $keyfile\n" if ! -r $keyfile;
   die "Cannot read certificate file $certfile\n" if !$root && ! -r $certfile;
-  my ($did, $dalg, $dfunc) = GetDigest($digestChoice || $digest);
-  print STDERR "default digest: $digest\n" if $debug;
-  warn "*** Warning: defaulting to sha1 since sha256 support not available\n"
-    if !$quiet && $digest eq 'sha1' && !$digestChoice;
-  $digest = $digestChoice if $digestChoice;
-  warn "*** Warning: sha1 use is strongly discouraged, continuing anyway\n"
-    if !$quiet && $digest eq 'sha1';
-  print STDERR "Using digest $digest\n" if $verbose;
 
   my ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub);
   if ($root) {
@@ -1308,9 +1356,13 @@ sub main
     die "Unsupported OpenSSH public key type ($sshkeybits), must be ssh-rsa\n"
       unless $sshkeyexp;
   }
+  my $sshkeystrength;
   if (!$root) {
-    print STDERR "$keytype Public Key Info:\n",
-        "  bits=$sshkeybits pubexp=$sshkeyexp\n" if $verbose;
+    my $sshkeyapprox;
+    ($sshkeystrength, $sshkeyapprox) = compute_rsa_strength($sshkeybits);
+    printf(STDERR "$keytype Public Key Info:\n".
+        "  bits=$sshkeybits pubexp=$sshkeyexp secstrenth=%s%s\n",
+	$sshkeystrength, ($sshkeyapprox ? ' (approximately)' : '')) if $verbose;
     print STDERR "  keyid=",
       join(":", toupper(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
     print STDERR "  fingerprint(md5)=",
@@ -1354,8 +1406,10 @@ sub main
   my ($pubkeybits,$pubkeyexp,$pubkeyid,$pfmd5,$pfsha1) = GetKeyInfo($pubkey);
   $sshkeyid = $pubkeyid if $root;
   die "Unparseable public key format in \"$keyfile\"\n" unless $pubkeybits;
-  print STDERR "RSA Private Key $keyfile:\n",
-    "  bits=$pubkeybits pubexp=$pubkeyexp\n" if $verbose;
+  my ($pubkeystrength, $pubkeyapprox) = compute_rsa_strength($pubkeybits);
+  printf(STDERR "RSA Private Key $keyfile:\n".
+    "  bits=$pubkeybits pubexp=$pubkeyexp secstrength=%s%s\n",
+    $pubkeystrength, ($pubkeyapprox?' (approximately)':'')) if $verbose;
   print STDERR "  keyid=",
     join(":", toupper(unpack("H*",$pubkeyid))=~/../g), "\n" if $verbose;
   print STDERR "  fingerprint(md5)=",
@@ -1373,6 +1427,36 @@ sub main
     . "unacceptably weak!\n" if $pubkeyexp < 35; # ssh-keygen used 35 'til v5.4
   warn "*** Warning: The private key's public exponent ($pubkeyexp) is weak "
     . "(< 65537), continuing anyway\n" if !$quiet && $pubkeyexp < 65537;
+
+  my $maxkeystrength = $pubkeystrength;
+  $maxkeystrength = $sshkeystrength
+    if $sshkeystrength && $sshkeystrength > $maxkeystrength;
+  my $digeststrength = GetDigestStrength($digestChoice || $digest);
+  my $digestsuggest = GetDigestNameForBits($maxkeystrength);
+  my $digestsuggestbits = GetDigestStrength($digestsuggest);
+  # Never warn or auto-choose if both keys are <= 1024 bits in length
+  if ($maxkeystrength > 80) {
+    if (!$digestChoice) {
+      if (!$hasSha2 && $digestsuggestbits > $digeststrength) {
+        warn "*** Warning: automatic digest selection $digestsuggest ".
+          "support not available\n" unless $quiet;
+      } else {
+        $digest = $digestsuggest;
+      }
+    }
+  }
+  my ($did, $dalg, $dfunc) = GetDigest($digestChoice || $digest);
+  print STDERR "default digest: $digest\n" if $debug;
+  if ($digestChoice && $digestsuggestbits > $digeststrength) {
+    warn "*** Warning: $digestsuggest (or stronger) is recommended for strength ".
+      "$maxkeystrength keys, continuing anyway\n" unless $quiet;
+  }
+  warn "*** Warning: defaulting to sha1 since SHA-2 support not available\n"
+    if !$quiet && $digest eq 'sha1' && !$digestChoice;
+  $digest = $digestChoice if $digestChoice;
+  warn "*** Warning: sha1 use is strongly discouraged, continuing anyway\n"
+    if !$quiet && $digest eq 'sha1';
+  print STDERR "Using digest $digest\n" if $verbose;
 
   my ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid);
   if ($root) {
