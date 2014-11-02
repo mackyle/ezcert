@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.16';
+  *VERSION = \'1.2.17';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -1635,8 +1635,7 @@ sub main
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
   my $name = MakeUTF8($ARGV[0]);
   $name = pack('C',$email?0x16:0x0C).DERLength(length($name)).$name;
-  $name = (($server || $codesign || $subca || $root || $applecodesign) ? $commonName :
-    ($email ? $emailAddress : $userId)) . $name;
+  $name = ($client ? $userId : ($email ? $emailAddress : $commonName)) . $name;
   $name = pack('C',0x30).DERLength(length($name)).$name;
   $name = pack('C',0x31).DERLength(length($name)).$name;
   if ($root && $useRandom) {
@@ -1674,9 +1673,14 @@ sub main
   $extCAVal = pack('C',0x04).DERLength(length($extCAVal)).$extCAVal;
   $extCAVal = $basicConstraints . $boolTRUE . $extCAVal;
   $extCAVal = pack('C',0x30).DERLength(length($extCAVal)).$extCAVal;
-  my $extKeyBits = ($subca || $root)  ? '0186' :
-    ($server ? '05A0' : ($email ? '05E0' : '0780'));
-  my $extKeyUse = pack('H*', '04040302'.$extKeyBits);
+  my $extKeyBits = 0x80;
+  $extKeyBits |= 0x06 if $subca || $root;
+  $extKeyBits |= 0x20 if $server;
+  $extKeyBits |= 0x60 if $email;
+  my $extKeySpare = scalar(@{[
+    unpack("B*", chr((($extKeyBits & ($extKeyBits-1)) ^ $extKeyBits) - 1))
+    =~ /1/g]});
+  my $extKeyUse = pack('H*', '04040302').pack('CC',$extKeySpare,$extKeyBits);
   $extKeyUse = $keyUsage . $boolTRUE. $extKeyUse;
   $extKeyUse = pack('C',0x30).DERLength(length($extKeyUse)).$extKeyUse;
   my $extXKeyUse = '';
