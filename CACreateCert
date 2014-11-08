@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.18';
+  *VERSION = \'1.2.19';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -1593,15 +1593,16 @@ sub main
         warn "*** Warning: automatic digest selection $digestsuggest ".
           "support not available\n" unless $quiet;
       } else {
-        $digest = $digestsuggest;
+        $digest = $digestsuggest if $digestsuggestbits > $digeststrength;
       }
     }
   }
   my ($did, $dalg, $dfunc) = GetDigest($digestChoice || $digest);
   print STDERR "default digest: $digest\n" if $debug;
   if ($digestChoice && $digestsuggestbits > $digeststrength) {
-    warn "*** Warning: $digestsuggest (or stronger) is recommended for strength ".
-      "$maxkeystrength keys, continuing anyway\n" unless $quiet;
+    warn "*** Warning: $digestsuggest (or stronger) is recommended for ".
+      "security strength $maxkeystrength keys, continuing anyway\n"
+      unless $quiet;
   }
   warn "*** Warning: defaulting to sha1 since SHA-2 support not available\n"
     if !$quiet && $digest eq 'sha1' && !$digestChoice;
