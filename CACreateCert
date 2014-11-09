@@ -378,6 +378,13 @@ NOTES
        be used together with ssh-keygen -y to create a suitable OpenSSH key that
        uses an exponent of 65537 instead of 35.
 
+       A client attempting to authenticate a server and following the rules in
+       RFC 6125 will COMPLETELY IGNORE the value given for a server certificate's
+       common name (CN) if any alternative name DNS values are present.  Although
+       that standard does not discuss IP alternative names, the user of this
+       utility is strongly advised to include the value from the server's CN
+       as one of the --dns values given if ANY --dns values are given.
+
 TIPS
        Display the currently available version of OpenSSL with:
 
