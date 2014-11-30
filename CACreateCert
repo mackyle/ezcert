@@ -385,6 +385,25 @@ NOTES
        utility is strongly advised to include the value from the server's CN
        as one of the --dns values given if ANY --dns values are given.
 
+       Using an IPv6 address as a --dns value will not interfere with the
+       correct working of an IPv4 address and/or DNS name as a --dns value, but
+       some older clients do not seem to reliably support checking IPv6 address
+       alternative name values so do not rely on them actually working
+       everywhere in practice.  The problematic clients stubbornly insist there
+       is a host name mismatch.
+
+       Link-local IPv6 addresses are unlikely to work since there's no way to
+       embed a scope value (and client support for a scope specifier is rare).
+       However, some platforms (i.e. Darwin) allow the scope number to be
+       embedded as octets 2 and 3 so that address FE80::... with a scope_id
+       value of 5 can be represented as FE80:5::... instead.  Of course the
+       correct scope_id value is host-specific, so a range of possibilities
+       would have to be included although since the loopback interface is
+       almost always scope_id 1 that one can be skipped.  Current versions
+       of the cURL command line utility DO actually correctly handle scope
+       ids as described in RFC 6874, correctly stripping off the zone value
+       from the host name included in the 'Host:' HTTP header.
+
 TIPS
        Display the currently available version of OpenSSL with:
 
@@ -401,6 +420,12 @@ BUGS
        standard (see RFC 5280) effectively requires at least two certificates
        in a valid certificate chain since a chain must have a non-root leaf
        to be valid.
+
+       DSA is not supported even though it is possible to create a valid
+       certificate that uses dsaWithSHA1.  But since SHA-1 should not be used
+       any longer after 2010-12-31 (NIST SP 800-131A) it's no big loss.  And
+       there do not seem to be any identifiers available for DSA with longer
+       hash algorithms anyway.
 
        The ability to sign using whirlpool, which requires use of an unofficial
        OID (1.2.840.113549.1.1.15) should, perhaps, not be allowed.
