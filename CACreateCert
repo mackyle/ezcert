@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.19';
+  *VERSION = \'1.2.20';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -192,6 +192,9 @@ OPTIONS
               Produce extra informational messages to standard error.
               Suppresses --quiet.
 
+       --man
+              Same as --verbose --help.
+
        --debug
               Show debugging information.  Automatically enables --verbose.
               Suppresses --quiet.
@@ -327,7 +330,8 @@ OPTIONS
               written to the same location as the generated certificate
               immediately following the certificate.  This option may be given
               more than once in which case the files will be appended to the
-              output in the order the --suffix options were given.
+              output in the order the --suffix options were given.  See the
+              NOTES section below for relevant information on use of --suffix.
 
        --dns domain-name-or-ip
               Ignored unless --server given.  Adds the given domain-name-or-ip
@@ -403,6 +407,28 @@ NOTES
        of the cURL command line utility DO actually correctly handle scope
        ids as described in RFC 6874, correctly stripping off the zone value
        from the host name included in the 'Host:' HTTP header.
+
+       The TLS (Transport Layer Security -- also sometimes referred to by the
+       previous standard's name, SSL [Secure Sockets Layer]) requires the peer
+       (either the server when the client is authenticating it or the client
+       when the server is authenticating it if client certificates are in use)
+       to supply the ENTIRE certificate chain in order from the leaf
+       certificate (that identifies the peer) on up through and INCLUDING the
+       root certificate (also known as the certificate authority).  Reference
+       RFC 5246 section 7.4.2 and the description of "certificate_list".  But
+       there is an exception listed, you MAY omit the last certificate (aka the
+       "root" certificate, "certificate authority" certificate or "self-signed"
+       certificate) under the assumption that the peer already has that or it
+       would not be able to decide whether or not to trust the certificate
+       even if it turns out to be a valid one.  What this means is that if you
+       are generating a client certificate and the client certificate's issuer
+       is not the root certificate for the chain, then you should probably add
+       the --suffix <path_to_issuer_cert> option for its issuer and if the
+       issuer's issuer is not the root certificate, add another --suffix option
+       and so on until the issuer of the certificate listed with the final
+       --suffix option is the root certificate (you may also go ahead and
+       include one more --suffix option for the root certificate but it's
+       likely unnecessary since the server should have that).
 
 TIPS
        Display the currently available version of OpenSSL with:
@@ -1383,6 +1409,7 @@ sub main
   eval {GetOptions(
       "help|h" => sub{$help=1;die"!FINISH"},
       "verbose|v" => \$verbose,
+      "man" => sub{$verbose=1;$help=1;die"!FINISH"},
       "version|V" => sub{print STDERR $VERSIONMSG;exit(0)},
       "debug" => \$debug,
       "quiet" => \$quiet,
@@ -1546,7 +1573,7 @@ sub main
     ($sshkeystrength, $sshkeyapprox) = compute_rsa_strength($sshkeybits);
     printf(STDERR "$keytype Public Key Info:\n".
         "  bits=$sshkeybits pubexp=$sshkeyexp secstrenth=%s%s\n",
-	$sshkeystrength, ($sshkeyapprox ? ' (approximately)' : '')) if $verbose;
+        $sshkeystrength, ($sshkeyapprox ? ' (approximately)' : '')) if $verbose;
     print STDERR "  keyid=",
       join(":", toupper(unpack("H*",$sshkeyid))=~/../g), "\n" if $verbose;
     print STDERR "  fingerprint(md5)=",
