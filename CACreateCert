@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 # CACreateCert - Create various types of certificates
-# Copyright (c) 2011,2012,2013 Kyle J. McKay.  All rights reserved.
+# Copyright (C) 2011-2015 Kyle J. McKay.  All rights reserved.
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -35,9 +35,9 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.2.20';
+  *VERSION = \'1.3.0';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
-    "Copyright (c) 2011-2014 Kyle J. McKay.  All rights reserved.\n" .
+    "Copyright (c) 2011-2015 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
     "http://gnu.org/licenses/agpl.html\n" .
     "This is free software: you are free to change and redistribute it.\n" .
@@ -106,7 +106,7 @@ Usage: CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
          [--root | --subca | --server | --codesign | --applecodesign | --email]
          [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pub_key_file] [--out out_cert.pem]
-         [--cert signing_cert] [--dns "name-or-ip"] [--dnq "qual"]
+         [--cert signing_cert] [--dni k=v] [--dns "name-or-ip"] [--dnq "qual"]
          --key priv_key_file "name string"
 USAGE
   $HELP = <<HELP;
@@ -119,7 +119,7 @@ SYNOPSIS
          [--root | --subca | --server | --codesign | --applecodesign | --email]
          [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pubkeyfile] [--out pemcertfile]
-         [--cert signing_cert] [--dns "name-or-ip"] [--dnq "qual"]
+         [--cert signing_cert] [--dni k=v] [--dns "name-or-ip"] [--dnq "qual"]
          --key priv_key_file "name string"
        CACreateCert --root [--random] --key priv_key_file "name string" > ca.pem
        CACreateCert --key priv_key_file --cert signing_cert "name string"
@@ -191,6 +191,10 @@ OPTIONS
        -v/--verbose
               Produce extra informational messages to standard error.
               Suppresses --quiet.
+
+       --list-oid-names
+              Show a list of recognized key names for the --dni option.  If
+              given other options are ignored.
 
        --man
               Same as --verbose --help.
@@ -296,7 +300,9 @@ OPTIONS
               the issuer name will be just the random serialNumber.  Use of this
               option will preclude production of byte-exact matching output
               certificates for the same input arguments.  This is now the
-              default when --root is given.
+              default when --root is given.  Roughly equivalent to adding a
+              --dni serialNumber=randomvalue option BEFORE any other --dni
+              options and then using --no-random.
 
        --no-random
               Ignored unless --root given.  Turns off the default --random
@@ -333,6 +339,29 @@ OPTIONS
               output in the order the --suffix options were given.  See the
               NOTES section below for relevant information on use of --suffix.
 
+       --dni [+]key=value | \@filename
+              Add distinguished name information.  This option may be repeated
+              multiple times as desired.  Key is either the name of an OID
+              attribute to add or a dotted OID number.  Recognized names may be
+              listed with the --list-oid-names option.  Value is a string value
+              to assign to the key.  Whitespace before and after as well as any
+              surrounding the '+' and '=' is completely ignored.  If a '+' is
+              prefixed to the key, the value will be combined with the previous
+              --dni item to make it multi-valued.  The '+' prefix requires at
+              least one previous --dni item that does NOT have a '+' prefix.
+              Instead of '[+]key=value', '\@filename' may be used instead.  If
+              filename is '-' then standard input will be read provided it is
+              not already being used to read the public key.  The 'filename'
+              must contain one --dni directive per line (with the '--dni' part
+              omitted).  Blank lines and lines with the first non-blank
+              character a '#' are ignored.  The directives in the file are
+              processed exactly as though they each appeared as a command line
+              '--dni' option in the order they appear in the file.
+
+       --no-max-len
+              Ignore any maximum length limits on most --dni values.  A warning
+              will still be issued unless --quiet is also used.
+
        --dns domain-name-or-ip
               Ignored unless --server given.  Adds the given domain-name-or-ip
               as a subject alternative name (either DNS or IPAddress).  May
@@ -352,6 +381,9 @@ OPTIONS
               name as the final component.  Use of this option is not
               recommended when using --server or --email.  The value must be
               a PrintableString (needs to match [A-Za-z0-9 '()+,./:=?-]+).
+              Equivalent to adding a --dni dnQualifier=qual option after any
+              other --dni options except that it is also placed AFTER any
+              "name string" value as well.
 
        name string
               The name to embed in the certificate as the subject.  This will
@@ -361,7 +393,10 @@ OPTIONS
               an email address in both the subject and subject alternative name.
               The "name string" value may never be omitted but may be explictly
               given as the empty string ('' or "") when generating a root
-              certificate using a random serial number.
+              certificate using a random serial number or when the distinguished
+              name attribute key that would be embedded (e.g. CN or UID) has
+              already had a value specified using a --dni option AND the
+              --email option has NOT been given.
 
 NOTES
        All systems support sha1 digest certificates, but sha1 should really not
@@ -609,6 +644,144 @@ sub formatman($;$)
   my $result = join("\n", @outlines);
   $result =~ s/\\\n//gso;
   return $result;
+}
+
+my %oidnames;
+my %knownoids;
+my %oidstringtypes;
+my %oidstringlengths;
+my %oidstringrestrictions;
+my $oidnamelist;
+
+BEGIN {
+  my %oiddata = (
+    'commonName'                        => '2.5.4.3',
+    'CN'                                => '2.5.4.3',
+    'surname'                           => '2.5.4.4',
+    'SN'                                => '2.5.4.4',
+    'serialNumber'                      => '2.5.4.5',
+    'countryName'                       => '2.5.4.6',
+    'C'                                 => '2.5.4.6',
+    'localityName'                      => '2.5.4.7',
+    'L'                                 => '2.5.4.7',
+    'stateOrProvinceName'               => '2.5.4.8',
+    'ST'                                => '2.5.4.8',
+    'streetAddress'                     => '2.5.4.9',
+    'street'                            => '2.5.4.9',
+    'organizationName'                  => '2.5.4.10',
+    'O'                                 => '2.5.4.10',
+    'organizationalUnitName'            => '2.5.4.11',
+    'OU'                                => '2.5.4.11',
+    'title'                             => '2.5.4.12',
+    'description'                       => '2.5.4.13',
+    'businessCategory'                  => '2.5.4.15',
+    'postalCode'                        => '2.5.4.17',
+    'telephoneNumber'                   => '2.5.4.20',
+    'facsimileTelephoneNumber'          => '2.5.4.23',
+    'givenName'                         => '2.5.4.42',
+    'GN'                                => '2.5.4.42',
+    'initials'                          => '2.5.4.43',
+    'generationQualifier'               => '2.5.4.44',
+    'dnQualifier'                       => '2.5.4.46',
+    'pseudonym'                         => '2.5.4.65',
+    'organizationIdentifier'            => '2.5.4.97',
+    'userId'                            => '0.9.2342.19200300.100.1.1',
+    'UID'                               => '0.9.2342.19200300.100.1.1',
+    'domainComponent'                   => '0.9.2342.19200300.100.1.25',
+    'DC'                                => '0.9.2342.19200300.100.1.25',
+    'emailAddress'                      => '1.2.840.113549.1.9.1',
+    'jurisdictionOfIncorporationLocalityName'=> '1.3.6.1.4.1.311.60.2.1.1',
+    'jurisdictionOfIncorporationLocality'=> '1.3.6.1.4.1.311.60.2.1.1',
+    'jurisdictionOfIncorporationStateOrProvinceName'=> '1.3.6.1.4.1.311.60.2.1.2',
+    'jurisdictionOfIncorporationStateOrProvince'=> '1.3.6.1.4.1.311.60.2.1.2',
+    'jurisdictionOfIncorporationCountryName'=> '1.3.6.1.4.1.311.60.2.1.3',
+    'jurisdictionOfIncorporationCountry'=> '1.3.6.1.4.1.311.60.2.1.3',
+
+    # Some extra help here for those last long ones and some obvious abbreviations
+    'joiL'                              => '1.3.6.1.4.1.311.60.2.1.1',
+    'joiST'                             => '1.3.6.1.4.1.311.60.2.1.2',
+    'joiC'                              => '1.3.6.1.4.1.311.60.2.1.3',
+    'country'                           => '2.5.4.6',
+    'city'                              => '2.5.4.7',
+    'locality'                          => '2.5.4.7',
+    'state'                             => '2.5.4.8',
+    'province'                          => '2.5.4.8',
+    'stateOrProvince'                   => '2.5.4.8',
+    'organization'                      => '2.5.4.10',
+    'organizationalUnit'                => '2.5.4.11',
+    'zip'                               => '2.5.4.17',
+    'zipCode'                           => '2.5.4.17',
+    'phone'                             => '2.5.4.20',
+    'phoneNumber'                       => '2.5.4.20',
+    'fax'                               => '2.5.4.23',
+    'faxNumber'                         => '2.5.4.23',
+    'DNQ'                               => '2.5.4.46',
+    'email'                             => '1.2.840.113549.1.9.1'
+  );
+  # p => PrintableString, i => IA5String, u => UTF8String
+  # If not listed prefer PrintableString if compatible otherwise UTF8String
+  %oidstringtypes = (
+    '2.5.4.5' => 'p',  # serialNumber
+    '2.5.4.6' => 'p',  # countryName
+    '2.5.4.46' => 'p', # dnQualifier
+    '1.2.840.113549.1.9.1' => 'i',      # emailAddress
+    '0.9.2342.19200300.100.1.25' => 'i' # domainComponent
+  );
+  # Exact number of characters required if single number "n"
+  # Minimum number of characters required if "n,"
+  # Maximum number of characters if ",n"
+  # Minimum and maximum number of characters if "n,m"
+  %oidstringlengths = (
+    '2.5.4.3'               =>  ',64',    # commonName
+    '2.5.4.4'               =>  ',40',    # surname
+    '2.5.4.5'               =>  ',64',    # serialNumber
+    '2.5.4.6'               =>     2 ,    # countryName
+    '2.5.4.7'               => ',128',    # localityName
+    '2.5.4.8'               => ',128',    # stateOrProvinceName
+    '2.5.4.9'               =>  ',30',    # streetAddress
+    '2.5.4.10'              =>  ',64',    # organizationName
+    '2.5.4.11'              =>  ',32',    # organizationUnitName
+    '2.5.4.12'              =>  ',64',    # title
+    '2.5.4.17'              =>  ',16',    # postalCode
+    '2.5.4.42'              =>  ',16',    # givenName
+    '2.5.4.43'              =>   ',5',    # initials
+    '2.5.4.44'              =>   ',3',    # generationQualifier
+    '2.5.4.65'              => ',128',    # pseudonym
+    '1.2.840.113549.1.9.1'  => ',255'     # emailAddress
+  );
+  # 'e' => must be an email address, 'd' => must be a domain name label
+  # 'c' => must be ISO 3166 2-character country code (2 'A'-'Z' will do)
+  %oidstringrestrictions = (
+    '2.5.4.6' => 'c',              # 2-character country code
+    '1.2.840.113549.1.9.1' => 'e',   # emailAddress RFC 5280 4.2.1.6 rfc822Name
+                                     # See 'Mailbox' Section 4.1.2 of RFC 2821
+    '0.9.2342.19200300.100.1.25' => 'd' # domainComponent RFC 4519
+  );
+  my %aliases = ();
+  my $maxlen = 0;
+  %oidnames = ();
+  %knownoids = ();
+  foreach my $key (keys(%oiddata)) {
+    my $l = length($key);
+    $maxlen = $l if $l > $maxlen;
+    my $value = $oiddata{$key};
+    $knownoids{$value} = 1;
+    $oidnames{lc($key)} = $value;
+    my $nlist = $aliases{$value};
+    $nlist = [], $aliases{$value} = $nlist unless $nlist;
+    push(@$nlist, $key);
+  }
+  my @list = ();
+  foreach my $oid (keys(%aliases)) {
+    my $aliases = $aliases{$oid};
+    my @sorted = sort({length($b) <=> length($a)} @$aliases);
+    my $canon = shift(@sorted);
+    push(@list, sprintf('%-*s =  %s', $maxlen, $canon, $oid));
+    foreach my $alias (@sorted) {
+      push(@list, sprintf('%-*s -> %s', $maxlen, $alias, $canon));
+    }
+  }
+  $oidnamelist = join('', map("$_\n", sort({lc($a) cmp lc($b)} @list)));
 }
 
 sub DERLength($)
@@ -1350,13 +1523,185 @@ sub handle_dns_opt($$)
   }
 }
 
+sub is_oid_valid($)
+{
+  my $oid = shift;
+  return 0 unless $oid =~ /^\d+(?:\.\d+)*$/os;
+  my @ids = split(/[.]/, $oid);
+  return 0 unless @ids >= 2;
+  return 0 unless $ids[0] <= 2;
+  return 0 if $ids[0] < 2 && $ids[1] >= 40;
+  return 1;
+}
+
+sub is_email_valid($)
+{
+  my $val = shift;
+  return 0 unless $val =~ /^([^@\s]+)\@([A-Za-z0-9.-]+)$/;
+  my ($local,$host) = ($1,$2);
+  return 0 unless is_dns_valid($host);
+  return $local =~ /^[[:print:]]+$/os ? 1 : 0;
+}
+
+sub validate_oid_value($$$)
+{
+  our $quiet;
+  our $nomaxlen;
+  my ($oid, $value, $key) = @_;
+  if (defined($oidstringlengths{$oid})) {
+    my $len = $oidstringlengths{$oid};
+    if ($len =~ /^\d+$/) {
+      if (length($value) != $len) {
+        warn "--dni key type '$key' requires exactly $len characters\n";
+        return 0;
+      }
+    } elsif ($len =~ /^,(\d+)$/) {
+      my $max = $1;
+      if (length($value) > $max) {
+        warn "--dni key type '$key' requires no more than $max characters\n"
+          unless $quiet;
+        return 0 unless $nomaxlen;
+      }
+    } elsif ($len =~ /^(\d+),$/) {
+      my $min = $1;
+      if (length($value) < $min) {
+        warn "--dni key type '$key' requires at least $min characters\n";
+        return 0;
+      }
+    } elsif ($len =~ /^(\d+),(\d+)$/) {
+      my ($min,$max) = ($1, $2);
+      if (length($value) < $min || length($value) > $max) {
+        warn "--dni key type '$key' requires $min-$max characters\n"
+          unless $quiet && length($value) >= $min;
+        return 0 unless $nomaxlen && length($value) >= $min;
+      }
+    } else {
+      die "Bad value \"$len\" in \%oidstringlengths for '$key'\n";
+    }
+  }
+  warn("--dni key values may not be empty (key '$key')\n"), return 0
+    unless length($value);
+  if (defined($oidstringtypes{$oid})) {
+    my $st = $oidstringtypes{$oid};
+    die "Invalid \%oidstringtype value '$st' for $oid\n"
+      unless $st eq 'u' || $st eq 'p' || $st eq 'i';
+    warn("--dni key type '$key' requires a PrintableString (must match ".
+      "[A-Za-z0-9 '()+,./:=?-]+)\n"), return 0
+      if $st eq 'p' && $value !~ m|^[A-Za-z0-9 '()+,./:=?-]+$|os;
+    warn("--dni key type '$key' requires an IA5String (must match ".
+      "[\x00-\x7F]+)\n"), return 0
+      if $st eq 'i' && $value !~ m|^[\x00-\x7F]+$|os;
+    warn("--dni key type '$key' requires a UTF8String\n"), return 0
+      if $st eq 'u' && !IsUTF8(MakeUTF8($value));
+  }
+  if (defined($oidstringrestrictions{$oid})) {
+    my $r = $oidstringrestrictions{$oid};
+    die "Invalid \%oidstringrestrictions value '$r' for $oid\n"
+      unless $r eq 'c' || $r eq 'd' || $r eq 'e';
+    warn("--dni key type '$key' requires 2 A-Z characters\n"), return 0
+      if $r eq 'c' && $value !~ m|^[A-Z]{2}$|;
+    warn("--dni key type '$key' requires 1-63 character dns label ".
+      "(letdig(letdighyp*)letdig*)\n"), return 0
+      if $r eq 'd' && (length($value) > 63 ||
+         $value !~ m|^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$|);
+    warn("--dni key type '$key' requires an email address (local\@host)\n"),
+      return 0 if $r eq 'e' && !is_email_valid($value);
+  }
+  return 1;
+}
+
+sub get_oid_string_type($$)
+{
+  my ($oid, $value) = @_;
+  if (defined($oidstringtypes{$oid})) {
+    my $st = $oidstringtypes{$oid};
+    return 12 if $st eq 'u';
+    return 19 if $st eq 'p';
+    return 22 if $st eq 'i';
+    die "Invalid \%oidstringtype value '$st' for $oid\n";
+  }
+  return 19 if $value =~ m|^[A-Za-z0-9 '()+,./:=?-]*$|os;
+  return 12;
+}
+
+sub handle_dni_opt($$$)
+{
+  my $opt = shift;
+  my $listref = shift;
+  my $stdinokref = shift;
+  my $dor;
+  if ($$stdinokref && $$stdinokref > 2) {
+    $dor = sub {warn "@_"; return 0}
+  } else {
+    $dor = sub {die "@_"}
+  }
+  $opt =~ s/^\s+//;
+  $opt =~ s/\s+$//;
+  if ($opt =~ /^\@(.*)$/os) {
+    my $fn = $1;
+    if ($$stdinokref && $$stdinokref > 2) {
+      warn "May not use \@filename syntax within a --dni \@filename file\n";
+      return 0;
+    }
+    die "May not use --dni \@- if stdin is being used for a public key\n"
+      if $fn eq '-' && !$$stdinokref;
+    die "May not use --dni \@- more than once\n"
+      if $fn eq '-' && $$stdinokref && $$stdinokref > 1;
+    ++$$stdinokref if $fn eq '-';
+    my $stdinnotok = 3;
+    my $input;
+    my $infilename;
+    if ($fn ne '-') {
+      $infilename = "\"$fn\"";
+      open($input, '<', $fn)
+        or die "Cannot open $infilename for input: $!\n";
+    } else {
+      $input = *STDIN;
+      $infilename = 'standard input';
+    }
+    my $lineno = 0;
+    while (my $line = <$input>) {
+      ++$lineno;
+      $line =~ s/(?:\r|\r\n|\n)$//os;
+      next if $line =~ /^\s*$/os || $line =~ /^\s*#/os;
+      &handle_dni_opt($line, $listref, \$stdinnotok)
+        or die "$infilename:$lineno: error: --dni \@filename syntax error\n";
+    }
+    close($input) if $fn ne '-';
+    return 1;
+  }
+  return &$dor("Bad --dni key=value option: $opt\n")
+    unless $opt =~ /^([+]?)\s*([^+=\s]+)\s*=\s*(.+)$/;
+  my ($mv,$key,$value) = ($1,$2,$3);
+  my $oid;
+  if ($key =~ /^[\d.]+$/) {
+    return &$dor("Bad --dni option invalid oid key: $key\n")
+      unless is_oid_valid($key);
+    warn "*** Warning: The OID $key is not recognized, value will be encoded ".
+      "as a PrintableString or UTF8String type\n" unless $knownoids{$key};
+    $oid = $key;
+  } else {
+    return &$dor("Bad --dni option unrecognized key name ".
+      "(use --list-oid-names): $key\n") unless $oidnames{lc($key)};
+    $oid = $oidnames{lc($key)};
+  }
+  return &$dor("Bad --dni option '+key=value' requires previous non-'+': $opt\n")
+    if $mv && !@$listref;
+  return &$dor("Bad --dni option invalid value for key: $opt\n")
+    unless validate_oid_value($oid, $value, $key);
+  push(@$listref, []) unless $mv;
+  push(@{$$listref[$#$listref]}, [$oid, $value]);
+  return 1;
+}
+
 sub main
 {
   Make1252(); # Set up the UTF-8 auxiliary conversion table
 
   my $help = '';
   my $verbose = '';
-  my $quiet = '';
+  our $quiet = '';
+  our $nomaxlen = '';
   my $keyfile = '';
   my $certfile = '';
   my $useNow = '';
@@ -1379,10 +1724,10 @@ sub main
   my $pubx509 = '';
   my $check = '';
   my $pathlen = '';
-  my $commonName = DEROID('2.5.4.3'); # :commonName
+  my $commonNameOID = '2.5.4.3'; # :commonName
   my $serialNumber = DEROID('2.5.4.5'); # :serialNumber
-  my $userId = DEROID('0.9.2342.19200300.100.1.1'); # :userId
-  my $emailAddress = DEROID('1.2.840.113549.1.9.1'); # :emailAddress
+  my $userIdOID = '0.9.2342.19200300.100.1.1'; # :userId
+  my $emailAddressOID = '1.2.840.113549.1.9.1'; # :emailAddress
   my $dnQualifier = DEROID('2.5.4.46'); # :dnQualifier
   my $basicConstraints = DEROID('2.5.29.19');
   my $keyUsage = DEROID('2.5.29.15');
@@ -1404,13 +1749,15 @@ sub main
   my @suffixfiles = ();
   my $suffix = '';
   my $qualifier = undef;
+  my @dnilist = ();
 
   #tests;
   eval {GetOptions(
       "help|h" => sub{$help=1;die"!FINISH"},
       "verbose|v" => \$verbose,
       "man" => sub{$verbose=1;$help=1;die"!FINISH"},
-      "version|V" => sub{print STDERR $VERSIONMSG;exit(0)},
+      "version|V" => sub{print $VERSIONMSG;exit(0)},
+      "list-oid-names" => sub{print $oidnamelist;exit(0)},
       "debug" => \$debug,
       "quiet" => \$quiet,
       "pubx509" => \$pubx509,
@@ -1419,6 +1766,7 @@ sub main
       "now" => \$useNow,
       "random" => \$useRandom,
       "no-random" => \$useNoRandom,
+      "no-max-len" => \$nomaxlen,
       "t" => \$termOK,
       "server" => \$server,
       "codesign" => \$codesign,
@@ -1435,9 +1783,10 @@ sub main
       "pathlen=i" => \$pathlen,
       "in=s" => \$infile,
       "out=s" => \$outfile,
-      "suffix=s" => sub{push(@suffixfiles, $_[1]);},
+      "suffix=s" => sub{push(@suffixfiles, $_[1])},
       "dnq=s" => \$qualifier,
-      "dns=s" => sub{handle_dns_opt($_[1], \@serverAltNames);}
+      "dns=s" => sub{handle_dns_opt($_[1], \@serverAltNames)},
+      "dni=s" => sub{push(@dnilist, $_[1])}
     )} || $help
       or die $USAGE;
   if ($help) {
@@ -1459,6 +1808,15 @@ sub main
     die "--suffix file '$suffixfile' does not exist or is not readable\n"
       if ! -e $suffixfile || ! -r $suffixfile;
   }
+  my @dnseq = ();
+  my $dnistdinok = $root || $infile ne '-';
+  foreach my $dnitem (@dnilist) {
+    handle_dni_opt($dnitem, \@dnseq, \$dnistdinok);
+  }
+  my %seensingletons = ();
+  foreach my $rdn (@dnseq) {
+    $seensingletons{${$$rdn[0]}[0]} = 1 if @$rdn == 1;
+  }
   $client = 1 if
     !$root && !$subca && !$server && !$codesign && !$applecodesign && !$email;
   $verbose = 1 if $debug || $check;
@@ -1467,19 +1825,47 @@ sub main
   my $keytype = 'OpenSSH';
   my $n = 'n';
   $keytype = 'pubx509', $n = '' if $pubx509;
-  die $USAGE if $root && $useRandom && $useNoRandom;
-  die $USAGE if !$keyfile || (!$root && !$certfile) || (!$check && @ARGV != 1);
+  die("May not combine --random and --no-random\n", $USAGE)
+    if $root && $useRandom && $useNoRandom;
+  die("Missing required --key option\n", $USAGE) if !$keyfile;
+  die("Missing required --cert option\n", $USAGE) if !$root && !$certfile;
+  die("Must have exactly one \"name string\" argument\n", $USAGE) if !$check && @ARGV != 1;
   die "Standard input is a tty (which is an unlikely source of a$n $keytype "
     . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
     if !$root && $infile eq '-' && -t STDIN && !$termOK;
   $useRandom = 1 if $root && !$useNoRandom;
-  die "Name may not be empty\n"
-    unless $check || $ARGV[0] || ($root && $useRandom);
+  my $emptynameok = $check || ($root && $useRandom);
+  if (!$emptynameok && $ARGV[0] eq '') {
+    if ($client) {
+      # Okay to be empty if we've seen a user id singleton
+      $emptynameok = 1 if $seensingletons{$userIdOID};
+    } elsif (!$email) {
+      # Okay to be empty if we've seen a common name singleton
+      $emptynameok = 1 if $seensingletons{$commonNameOID};
+    }
+    die "\"name string\" may not be empty\n" unless $emptynameok;
+  }
   die "Distinguished name qualifier may not be empty string\n"
-    unless !defined($qualifier) || $qualifier;
+    unless !defined($qualifier) || $qualifier ne '';
   die "Invalid distinguished name qualifier (must match [A-Za-z0-9 '()+,./:=?-]+)\n"
     unless !$qualifier || $qualifier =~ m|^[A-Za-z0-9 '()+,./:=?-]+$|;
+  if (!$check && $ARGV[0] ne '') {
+    my ($oid, $key);
+    if ($client) {
+      $oid = $userIdOID;
+      $key = 'UID';
+    } elsif ($email) {
+      $oid = $emailAddressOID;
+      $key = 'emailAddress';
+    } else {
+      $oid = $commonNameOID;
+      $key = 'CN';
+    }
+    die "Bad \"name string\" value\n"
+      unless validate_oid_value($oid, $ARGV[0], $key);
+    push(@dnseq, [[$oid, $ARGV[0]]]);
+  }
   my $opensshdotpub;
   my $infilename;
   foreach my $suffixfile (@suffixfiles) {
@@ -1737,18 +2123,25 @@ EOT
   my $randval = $useRandom ? RandomID($quiet) : undef;
   my $sigAlg = $dalg . pack('CC',0x05,0x00);
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
-  my $name = MakeUTF8($ARGV[0]);
-  $name = pack('C',$email?0x16:0x0C).DERLength(length($name)).$name;
-  $name = ($client ? $userId : ($email ? $emailAddress : $commonName)) . $name;
-  $name = pack('C',0x30).DERLength(length($name)).$name;
-  $name = pack('C',0x31).DERLength(length($name)).$name;
+  my $name = '';
+  foreach my $rdn (@dnseq) {
+    my $packedrdn = '';
+    foreach my $pair (@$rdn) {
+      my $packedoid = DEROID($$pair[0]);
+      my $val = MakeUTF8($$pair[1]);
+      my $st = get_oid_string_type($$pair[0], $$pair[1]);
+      my $packed = $packedoid.pack('C',$st).DERLength(length($val)).$val;
+      $packedrdn .= pack('C',0x30).DERLength(length($packed)).$packed;
+    }
+    $name .= pack('C',0x31).DERLength(length($packedrdn)).$packedrdn;
+  }
   if ($root && $useRandom) {
     my $serialRDN = join(":", tolower(unpack("H*",$randval))=~/../g);
     $serialRDN = pack('C',0x13).DERLength(length($serialRDN)).$serialRDN;
     $serialRDN = $serialNumber . $serialRDN;
     $serialRDN = pack('C',0x30).DERLength(length($serialRDN)).$serialRDN;
     $serialRDN = pack('C',0x31).DERLength(length($serialRDN)).$serialRDN;
-    $name = $serialRDN . ($ARGV[0] ? $name : '');
+    $name = $serialRDN . $name;
   }
   if ($qualifier) {
     my $dnq = $qualifier;
