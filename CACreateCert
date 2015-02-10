@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.3.0';
+  *VERSION = \'1.3.1';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2015 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -274,6 +274,12 @@ OPTIONS
               extended key usage items will be included (up to five -- one for
               each option given).
 
+       --acme
+              Giving this option causes most of the other options to be ignored.
+              A unique "Acme" root certificate will be created and output each
+              CACreateCert is run with this option.  The only required option
+              is --key when generating an "Acme" certificate.
+
        --pathlen n
               The --pathlen option will be ignored unless --subca is given in
               which case the X509v3 Basic Constraints will include the
@@ -396,7 +402,8 @@ OPTIONS
               certificate using a random serial number or when the distinguished
               name attribute key that would be embedded (e.g. CN or UID) has
               already had a value specified using a --dni option AND the
-              --email option has NOT been given.
+              --email option has NOT been given.  The name string is ignored,
+              if present, when --acme is used.
 
 NOTES
        All systems support sha1 digest certificates, but sha1 should really not
@@ -473,6 +480,42 @@ TIPS
        Display the currently available version of OpenSSH with:
 
            ssh -V
+
+EXAMPLES
+       Valid certificate chains always must contain at least two certificates,
+       the leaf certificate and the root certificate.  There may be additional
+       intermediate certificates in the chain between them.
+
+       Here's an example of how to quickly create a valid web server
+       certificate chain for an 'example.com' web server:
+
+       1. Create a root certificate key:
+
+          openssl genrsa -f4 -out root_key.pem 3072
+
+       2. Generate a server certificate key and extract its public key:
+
+          openssl genrsa -f4 -out server_key.pem 3072
+          openssl rsa -in server_key.pem -pubout -out server_key_pub.pem
+
+       3. Generate an Acme root certificate:
+
+          CACreateCert --acme --key root_key.pem --out root_cert.pem
+
+       4. Generate a server certificate for 'example.com':
+
+          CACreateCert --server --key root_key.pem --cert root_cert.pem \
+            --in server_key_pub.pem --out server_cert.pem "example.com"
+
+       Optionally add one or more --dns and/or --dni options when generating
+       the --server certificate.
+
+       To configure a web server to serve 'example.com' over https the
+       root_cert.pem, server_cert.pem and server_key.pem files will be needed.
+
+       Clients connecting to 'example.com' over https will get an untrusted
+       root certificate error unless they trust root_cert.pem as a certificate
+       authority or otherwise add an exception.
 
 BUGS
        The ability to create self-signed types other than --root by combining
@@ -1264,14 +1307,6 @@ sub BreakLine($$)
   return @ans;
 }
 
-sub tests
-{
-  print STDERR unpack('H*', DEROID('2.100.3')),"\n"; # should be 0603813403
-  for (my $i=0; $i<16; ++$i) {
-    print STDERR unpack('H*', RandomID(1)),"\n"; # Hi bit should NOT be set
-  }
-}
-
 sub whirlpool($)
 {
   my $data = shift;
@@ -1702,10 +1737,11 @@ sub main
   my $verbose = '';
   our $quiet = '';
   our $nomaxlen = '';
+  my $acme = '';
   my $keyfile = '';
   my $certfile = '';
   my $useNow = '';
-  my $useRandom = '';
+  our $useRandom = '';
   my $useNoRandom = '';
   my $termOK = '';
   my $server = '';
@@ -1715,7 +1751,7 @@ sub main
   my $client = '';
   my $email = '';
   my $subca = '';
-  my $root = '';
+  our $root = '';
   my $rootauth = '';
   my $authext = '';
   my $digest = $hasSha2 ? 'sha256' : 'sha1';
@@ -1751,7 +1787,6 @@ sub main
   my $qualifier = undef;
   my @dnilist = ();
 
-  #tests;
   eval {GetOptions(
       "help|h" => sub{$help=1;die"!FINISH"},
       "verbose|v" => \$verbose,
@@ -1763,6 +1798,7 @@ sub main
       "pubx509" => \$pubx509,
       "pubX509" => \$pubx509,
       "check" => \$check,
+      "acme" => \$acme,
       "now" => \$useNow,
       "random" => \$useRandom,
       "no-random" => \$useNoRandom,
@@ -1801,6 +1837,28 @@ sub main
     }
     exit(0);
   }
+  die "--acme and --check are not compatible\n" if $acme && $check;
+  my @dnseq = ();
+  if ($acme) {
+    $useNow = '';
+    $useNoRandom = '';
+    $useRandom = 1;
+    $root = 1;
+    $rootauth = '';
+    $qualifier = undef;
+    @serverAltNames = ();
+    $client = $subca = $server = $codesign = $applecodesign = $email = '';
+    @suffixfiles = ();
+    @dnseq = (
+      [[$oidnames{'o'}, 'Acme Products Corporation']],
+      [[$oidnames{'ou'}, 'Internet Services Division']],
+      [[$oidnames{'ou'}, 'Acme Certificate Co.']],
+      [[$oidnames{'ou'}, 'Certificate Services']],
+      [[$oidnames{'ou'}, 'Root Certificate Production']],
+      [[$oidnames{'serialnumber'}, '']],
+      [[$oidnames{'cn'}, 'Acme Root Certificate']]
+    );
+  }
   die "--in requires a filename\n" if !$root && !$infile;
   die "--out requires a filename\n" if !$outfile;
   foreach my $suffixfile (@suffixfiles) {
@@ -1808,7 +1866,6 @@ sub main
     die "--suffix file '$suffixfile' does not exist or is not readable\n"
       if ! -e $suffixfile || ! -r $suffixfile;
   }
-  my @dnseq = ();
   my $dnistdinok = $root || $infile ne '-';
   foreach my $dnitem (@dnilist) {
     handle_dni_opt($dnitem, \@dnseq, \$dnistdinok);
@@ -1829,7 +1886,8 @@ sub main
     if $root && $useRandom && $useNoRandom;
   die("Missing required --key option\n", $USAGE) if !$keyfile;
   die("Missing required --cert option\n", $USAGE) if !$root && !$certfile;
-  die("Must have exactly one \"name string\" argument\n", $USAGE) if !$check && @ARGV != 1;
+  die("Must have exactly one \"name string\" argument\n", $USAGE)
+    if !$check && !$acme && @ARGV != 1;
   die "Standard input is a tty (which is an unlikely source of a$n $keytype "
     . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
@@ -1850,7 +1908,7 @@ sub main
     unless !defined($qualifier) || $qualifier ne '';
   die "Invalid distinguished name qualifier (must match [A-Za-z0-9 '()+,./:=?-]+)\n"
     unless !$qualifier || $qualifier =~ m|^[A-Za-z0-9 '()+,./:=?-]+$|;
-  if (!$check && $ARGV[0] ne '') {
+  if (!$check && @ARGV && $ARGV[0] ne '') {
     my ($oid, $key);
     if ($client) {
       $oid = $userIdOID;
@@ -2120,9 +2178,26 @@ EOT
   return 0 if $check;
 
   my $version = pack('CCCCC', 0xA0, 0x03, 0x02, 0x01, 0x02); # v3
-  my $randval = $useRandom ? RandomID($quiet) : undef;
+  my $randval;
+  my $serialRDN;
+  if ($useRandom) {
+    $randval = RandomID($quiet);
+    $serialRDN = join(":", tolower(unpack("H*",$randval))=~/../g) if $root;
+  }
   my $sigAlg = $dalg . pack('CC',0x05,0x00);
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
+  my $stuffedrand = '';
+  if ($root && $useRandom && $seensingletons{'2.5.4.5'}) {
+    foreach my $rdn (@dnseq) {
+      if (@$rdn == 1 && ${$$rdn[0]}[0] eq '2.5.4.5') {
+        if (${$$rdn[0]}[1] eq '') {
+          ${$$rdn[0]}[1] = $serialRDN;
+          $stuffedrand = 1;
+          last;
+        }
+      }
+    }
+  }
   my $name = '';
   foreach my $rdn (@dnseq) {
     my $packedrdn = '';
@@ -2135,8 +2210,7 @@ EOT
     }
     $name .= pack('C',0x31).DERLength(length($packedrdn)).$packedrdn;
   }
-  if ($root && $useRandom) {
-    my $serialRDN = join(":", tolower(unpack("H*",$randval))=~/../g);
+  if ($root && $useRandom && !$stuffedrand) {
     $serialRDN = pack('C',0x13).DERLength(length($serialRDN)).$serialRDN;
     $serialRDN = $serialNumber . $serialRDN;
     $serialRDN = pack('C',0x30).DERLength(length($serialRDN)).$serialRDN;
