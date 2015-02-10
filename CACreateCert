@@ -35,7 +35,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.3.1';
+  *VERSION = \'1.3.2';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2015 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -297,15 +297,18 @@ OPTIONS
               will also be included.
 
        --random
-              Ignored unless --root given.  When generating a --root certificate
-              normally only the "name string" value is embedded (as the CN
-              attribute).  If this option is given, a random serialNumber will
-              be generated and the issuer name will be the serialNumber followed
-              by the CN.  If this option is given, the "name string" may be set
-              to the empty string (it must be explicit, e.g. "") in which case
-              the issuer name will be just the random serialNumber.  Use of this
-              option will preclude production of byte-exact matching output
-              certificates for the same input arguments.  This is now the
+              Use a random serial number instead of one determined by the actual
+              contents of the certificate.  When generating a --root certificate
+              the issuer name will also include a serialNumber attribute as the
+              first item followed by the "name string" value (as the CN
+              attribute).  This can be modified by use of one or more --dni
+              options and if a --dni serialNumber=# option is used then the '#'
+              will be replaced by the actual serial number generated and in the
+              case of a --root certificate the extra serialNumber attribute at
+              the beginning of the issuer name will be suppressed.  Only one
+              --dni serialNumber=# is allowed and it must be non-multivalued.
+              Use of this option will preclude production of byte-exact matching
+              output certificates for the same input arguments.  This is now the
               default when --root is given.  Roughly equivalent to adding a
               --dni serialNumber=randomvalue option BEFORE any other --dni
               options and then using --no-random.
@@ -362,7 +365,8 @@ OPTIONS
               omitted).  Blank lines and lines with the first non-blank
               character a '#' are ignored.  The directives in the file are
               processed exactly as though they each appeared as a command line
-              '--dni' option in the order they appear in the file.
+              '--dni' option in the order they appear in the file.  See also
+              description for --random option.
 
        --no-max-len
               Ignore any maximum length limits on most --dni values.  A warning
@@ -703,6 +707,7 @@ BEGIN {
     'surname'                           => '2.5.4.4',
     'SN'                                => '2.5.4.4',
     'serialNumber'                      => '2.5.4.5',
+    'serial'                            => '2.5.4.5',
     'countryName'                       => '2.5.4.6',
     'C'                                 => '2.5.4.6',
     'localityName'                      => '2.5.4.7',
@@ -1582,6 +1587,7 @@ sub validate_oid_value($$$)
 {
   our $quiet;
   our $nomaxlen;
+  our $useRandom;
   my ($oid, $value, $key) = @_;
   if (defined($oidstringlengths{$oid})) {
     my $len = $oidstringlengths{$oid};
@@ -1622,7 +1628,8 @@ sub validate_oid_value($$$)
       unless $st eq 'u' || $st eq 'p' || $st eq 'i';
     warn("--dni key type '$key' requires a PrintableString (must match ".
       "[A-Za-z0-9 '()+,./:=?-]+)\n"), return 0
-      if $st eq 'p' && $value !~ m|^[A-Za-z0-9 '()+,./:=?-]+$|os;
+      if $st eq 'p' && $value !~ m|^[A-Za-z0-9 '()+,./:=?-]+$|os &&
+         ($oid ne '2.5.4.5' || !$useRandom || $value ne '#');
     warn("--dni key type '$key' requires an IA5String (must match ".
       "[\x00-\x7F]+)\n"), return 0
       if $st eq 'i' && $value !~ m|^[\x00-\x7F]+$|os;
@@ -1838,6 +1845,9 @@ sub main
     exit(0);
   }
   die "--acme and --check are not compatible\n" if $acme && $check;
+  die("May not combine --random and --no-random\n", $USAGE)
+    if $root && $useRandom && $useNoRandom;
+  $useRandom = 1 if $root && !$useNoRandom;
   my @dnseq = ();
   if ($acme) {
     $useNow = '';
@@ -1855,7 +1865,7 @@ sub main
       [[$oidnames{'ou'}, 'Acme Certificate Co.']],
       [[$oidnames{'ou'}, 'Certificate Services']],
       [[$oidnames{'ou'}, 'Root Certificate Production']],
-      [[$oidnames{'serialnumber'}, '']],
+      [[$oidnames{'serial'}, '#']],
       [[$oidnames{'cn'}, 'Acme Root Certificate']]
     );
   }
@@ -1870,6 +1880,21 @@ sub main
   foreach my $dnitem (@dnilist) {
     handle_dni_opt($dnitem, \@dnseq, \$dnistdinok);
   }
+  if ($useRandom) {
+    my $stuffcount = 0;
+    my $seenbad = 0;
+    RDN: foreach my $rdn (@dnseq) {
+      if (@$rdn == 1) {
+        ++$stuffcount if ${$$rdn[0]}[0] eq '2.5.4.5' && ${$$rdn[0]}[1] eq '#';
+      } else {
+        foreach my $mv (@$rdn) {
+          $seenbad = 1, last RDN if $$mv[0] eq '2.5.4.5' && $$mv[1] eq '#';
+        }
+      }
+    }
+    die "--dni serialNumber=# can only be used at most once and only ".
+      "non-multivalued\n" if $seenbad || $stuffcount > 1;
+  }
   my %seensingletons = ();
   foreach my $rdn (@dnseq) {
     $seensingletons{${$$rdn[0]}[0]} = 1 if @$rdn == 1;
@@ -1882,8 +1907,6 @@ sub main
   my $keytype = 'OpenSSH';
   my $n = 'n';
   $keytype = 'pubx509', $n = '' if $pubx509;
-  die("May not combine --random and --no-random\n", $USAGE)
-    if $root && $useRandom && $useNoRandom;
   die("Missing required --key option\n", $USAGE) if !$keyfile;
   die("Missing required --cert option\n", $USAGE) if !$root && !$certfile;
   die("Must have exactly one \"name string\" argument\n", $USAGE)
@@ -1892,7 +1915,6 @@ sub main
     . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
     if !$root && $infile eq '-' && -t STDIN && !$termOK;
-  $useRandom = 1 if $root && !$useNoRandom;
   my $emptynameok = $check || ($root && $useRandom);
   if (!$emptynameok && $ARGV[0] eq '') {
     if ($client) {
@@ -2190,7 +2212,7 @@ EOT
   if ($root && $useRandom && $seensingletons{'2.5.4.5'}) {
     foreach my $rdn (@dnseq) {
       if (@$rdn == 1 && ${$$rdn[0]}[0] eq '2.5.4.5') {
-        if (${$$rdn[0]}[1] eq '') {
+        if (${$$rdn[0]}[1] eq '#') {
           ${$$rdn[0]}[1] = $serialRDN;
           $stuffedrand = 1;
           last;
