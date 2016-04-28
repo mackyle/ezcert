@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 # CACreateCert - Create various types of certificates
-# Copyright (C) 2011-2015 Kyle J. McKay.  All rights reserved.
+# Copyright (C) 2011-2016 Kyle J. McKay.  All rights reserved.
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -95,8 +95,8 @@ BEGIN {
   die "One of Digest::SHA1 or Digest::SHA or Digest::SHA::PurePerl "
     . "must be available\n";
 
-  eval {(`openssl version -v 2>/dev/null` || '') =~ /^OpenSSL /} ||
-    die "OpenSSL (as the openssl command) is not available in the PATH\n";
+  eval {(`openssl version -v 2>/dev/null` || '') =~ /^(?:Open|Libre)SSL /} ||
+    die "OpenSSL/LibreSSL (as the openssl command) is not available in the PATH\n";
 }
 
 BEGIN {
