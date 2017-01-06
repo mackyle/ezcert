@@ -1,7 +1,8 @@
 #!/usr/bin/env perl
 
 # CACreateCert - Create various types of certificates
-# Copyright (C) 2011-2016 Kyle J. McKay.  All rights reserved.
+# Copyright (C) 2011-2017 Kyle J. McKay.
+# All rights reserved.
 
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -35,7 +36,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.3.2';
+  *VERSION = \'1.3.3';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (c) 2011-2015 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -277,8 +278,8 @@ OPTIONS
        --acme
               Giving this option causes most of the other options to be ignored.
               A unique "Acme" root certificate will be created and output each
-              CACreateCert is run with this option.  The only required option
-              is --key when generating an "Acme" certificate.
+              time CACreateCert is run with this option.  The only required
+              option is --key when generating an "Acme" certificate.
 
        --pathlen n
               The --pathlen option will be ignored unless --subca is given in
@@ -366,7 +367,9 @@ OPTIONS
               character a '#' are ignored.  The directives in the file are
               processed exactly as though they each appeared as a command line
               '--dni' option in the order they appear in the file.  See also
-              description for --random option.
+              the description for the --random option for details of the
+              '--dni serialNumber=#' variant and the description of the "name
+              string" for details of the '--dni emailAddress=\@' variant.
 
        --no-max-len
               Ignore any maximum length limits on most --dni values.  A warning
@@ -407,7 +410,11 @@ OPTIONS
               name attribute key that would be embedded (e.g. CN or UID) has
               already had a value specified using a --dni option AND the
               --email option has NOT been given.  The name string is ignored,
-              if present, when --acme is used.
+              if present, when --acme is used.  For --email, however, if a
+              --dni emailAddress=\@ option appears then the email address will
+              be embedded into the subject at that location rather than at the
+              default location (which is after the --dni values but before the
+              --dnq value).
 
 NOTES
        All systems support sha1 digest certificates, but sha1 should really not
@@ -474,7 +481,9 @@ NOTES
        and so on until the issuer of the certificate listed with the final
        --suffix option is the root certificate (you may also go ahead and
        include one more --suffix option for the root certificate but it's
-       likely unnecessary since the server should have that).
+       likely unnecessary since the server should have that).  But, if the
+       server is using public key pinning to validate the root certificate then
+       you must include the root certificate just as RFC 5246 says to do.
 
 TIPS
        Display the currently available version of OpenSSL with:
@@ -485,10 +494,18 @@ TIPS
 
            ssh -V
 
+       When adding --dni values, the convention is to list the most general
+       first (e.g. country) moving on to more specific and ending with common
+       name (CN) (and for email, the emailAddress), possibly finally followed
+       by a dnQualifier if any.  This ordering is not set in stone but is
+       generally recommended.
+
 EXAMPLES
        Valid certificate chains always must contain at least two certificates,
        the leaf certificate and the root certificate.  There may be additional
        intermediate certificates in the chain between them.
+
+       '''CREATING A SERVER CERTIFICATE'''
 
        Here's an example of how to quickly create a valid web server
        certificate chain for an 'example.com' web server:
@@ -520,6 +537,51 @@ EXAMPLES
        Clients connecting to 'example.com' over https will get an untrusted
        root certificate error unless they trust root_cert.pem as a certificate
        authority or otherwise add an exception.
+
+       '''CREATING AN EMAIL CERTIFICATE'''
+
+       Here's an example of how to quickly create a valid email certificate
+       chain for the name "John Smith" with email address <jsmith\@example.com>:
+
+       1. Create a root certificate key:
+
+          openssl genrsa -f4 -out root_key.pem 3072
+
+       2. Generate an email certificate key and extract its public key:
+
+          openssl genrsa -f4 -out email_key.pem 3072
+          openssl rsa -in email_key.pem -pubout -out email_key_pub.pem
+
+       3. Generate an Acme root certificate:
+
+          CACreateCert --acme --key root_key.pem --out root_cert.pem
+
+       4. Generate an email certificate for "John Smith" <jsmith\@example.com>:
+
+          CACreateCert --email --key root_key.pem --cert root_cert.pem \
+            --in email_key_pub.pem --out email_cert.pem --dni CN="John Smith" \
+            "jsmith\@example.com"
+
+       Additional information may be added with more --dni options or the
+       common name (CN) may even just be omitted entirely.
+
+       5. Create a .p12 file containing the two certs and the private key:
+
+       This step is optional but may be the only way to get the key into your
+       system (e.g. Mac OS X Keychain -- which also requires you to either
+       trust the root for basic X.509 policy or the cert itself for S/MIME).
+
+          openssl pkcs12 -export -inkey email_key.pem -in email_cert.pem \
+            -certfile root_cert.pem -nodes -out email_certs.p12 \
+            -passout pass:"dummy" -name "My Email Key"
+
+       Use a better password than dummy though.  :)
+
+       To configure an email client to use the new certificate, the
+       root_cert.pem, email_cert.pem and email_key.pem files will be needed or
+       alternatively the email_certs.p12 file.
+       (Some email software will let you squeak by without root_cert.pem.)
+
 
 BUGS
        The ability to create self-signed types other than --root by combining
@@ -1574,21 +1636,32 @@ sub is_oid_valid($)
   return 1;
 }
 
-sub is_email_valid($)
+sub is_email_valid($;$$)
 {
-  my $val = shift;
+  my ($val, $emailatok, $emailatseen) = @_;
+  my $isat;
+  if ($val eq "@") {
+    return 0 if !$emailatok || $$emailatseen;
+    $val = $emailatok;
+    $isat = 1;
+  }
   return 0 unless $val =~ /^([^@\s]+)\@([A-Za-z0-9.-]+)$/;
   my ($local,$host) = ($1,$2);
   return 0 unless is_dns_valid($host);
-  return $local =~ /^[[:print:]]+$/os ? 1 : 0;
+  return 0 unless $local =~ /^[[:print:]]+$/os;
+  if ($isat) {
+    $_[0] = $emailatok;
+    $$emailatseen = 1;
+  }
+  return 1;
 }
 
-sub validate_oid_value($$$)
+sub validate_oid_value($$$;$$)
 {
   our $quiet;
   our $nomaxlen;
   our $useRandom;
-  my ($oid, $value, $key) = @_;
+  my ($oid, $value, $key, $emailatok, $emailatseen) = @_;
   if (defined($oidstringlengths{$oid})) {
     my $len = $oidstringlengths{$oid};
     if ($len =~ /^\d+$/) {
@@ -1647,7 +1720,7 @@ sub validate_oid_value($$$)
       if $r eq 'd' && (length($value) > 63 ||
          $value !~ m|^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$|);
     warn("--dni key type '$key' requires an email address (local\@host)\n"),
-      return 0 if $r eq 'e' && !is_email_valid($value);
+      return 0 if $r eq 'e' && !is_email_valid($_[1], $emailatok, $emailatseen);
   }
   return 1;
 }
@@ -1666,11 +1739,13 @@ sub get_oid_string_type($$)
   return 12;
 }
 
-sub handle_dni_opt($$$)
+sub handle_dni_opt($$$$$)
 {
   my $opt = shift;
   my $listref = shift;
   my $stdinokref = shift;
+  my $emailatok = shift;
+  my $emailatseen = shift;
   my $dor;
   if ($$stdinokref && $$stdinokref > 2) {
     $dor = sub {warn "@_"; return 0}
@@ -1706,7 +1781,7 @@ sub handle_dni_opt($$$)
       ++$lineno;
       $line =~ s/(?:\r|\r\n|\n)$//os;
       next if $line =~ /^\s*$/os || $line =~ /^\s*#/os;
-      &handle_dni_opt($line, $listref, \$stdinnotok)
+      &handle_dni_opt($line, $listref, \$stdinnotok, $emailatok, $emailatseen)
         or die "$infilename:$lineno: error: --dni \@filename syntax error\n";
     }
     close($input) if $fn ne '-';
@@ -1730,7 +1805,7 @@ sub handle_dni_opt($$$)
   return &$dor("Bad --dni option '+key=value' requires previous non-'+': $opt\n")
     if $mv && !@$listref;
   return &$dor("Bad --dni option invalid value for key: $opt\n")
-    unless validate_oid_value($oid, $value, $key);
+    unless validate_oid_value($oid, $value, $key, $emailatok, $emailatseen);
   push(@$listref, []) unless $mv;
   push(@{$$listref[$#$listref]}, [$oid, $value]);
   return 1;
@@ -1876,9 +1951,16 @@ sub main
     die "--suffix file '$suffixfile' does not exist or is not readable\n"
       if ! -e $suffixfile || ! -r $suffixfile;
   }
+  $client = 1 if
+    !$root && !$subca && !$server && !$codesign && !$applecodesign && !$email;
   my $dnistdinok = $root || $infile ne '-';
+  my ($emailatok, $emailatseen);
+  if (!$client && $email && defined($ARGV[0]) && $ARGV[0] ne "") {
+    $emailatok = $ARGV[0];
+    $emailatseen = 0;
+  }
   foreach my $dnitem (@dnilist) {
-    handle_dni_opt($dnitem, \@dnseq, \$dnistdinok);
+    handle_dni_opt($dnitem, \@dnseq, \$dnistdinok, $emailatok, \$emailatseen);
   }
   if ($useRandom) {
     my $stuffcount = 0;
@@ -1899,8 +1981,6 @@ sub main
   foreach my $rdn (@dnseq) {
     $seensingletons{${$$rdn[0]}[0]} = 1 if @$rdn == 1;
   }
-  $client = 1 if
-    !$root && !$subca && !$server && !$codesign && !$applecodesign && !$email;
   $verbose = 1 if $debug || $check;
   $quiet = 0 if $verbose || $check;
   print STDERR $VERSIONMSG if $verbose;
@@ -1943,8 +2023,8 @@ sub main
       $key = 'CN';
     }
     die "Bad \"name string\" value\n"
-      unless validate_oid_value($oid, $ARGV[0], $key);
-    push(@dnseq, [[$oid, $ARGV[0]]]);
+      unless $emailatseen || validate_oid_value($oid, $ARGV[0], $key);
+    push(@dnseq, [[$oid, $ARGV[0]]]) unless $emailatseen;
   }
   my $opensshdotpub;
   my $infilename;
