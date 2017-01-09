@@ -500,6 +500,10 @@ TIPS
        by a dnQualifier if any.  This ordering is not set in stone but is
        generally recommended.
 
+       Convert a regular certificate into a certificate request using openssl:
+
+         openssl x509 -in cert.pem -signkey key.pem -x509toreq -out csr.pem
+
 EXAMPLES
        Valid certificate chains always must contain at least two certificates,
        the leaf certificate and the root certificate.  There may be additional
