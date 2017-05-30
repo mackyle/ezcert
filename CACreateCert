@@ -592,8 +592,10 @@ BUGS
        the --root option with one of the others (e.g. --client, --email,
        --codesign, --server) is poorly documented.  Furthermore, since the
        standard (see RFC 5280) effectively requires at least two certificates
-       in a valid certificate chain since a chain must have a non-root leaf
-       to be valid.
+       in any certificate chain (because a chain must have a non-root leaf
+       certificate), such self-signed combination root certificates, when used
+       by themselves, are technically unable to create a valid certificate
+       chain.
 
        DSA is not supported even though it is possible to create a valid
        certificate that uses dsaWithSHA1.  But since SHA-1 should not be used
