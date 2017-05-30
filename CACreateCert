@@ -36,9 +36,9 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.3.3';
+  *VERSION = \'1.3.4';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
-    "Copyright (c) 2011-2015 Kyle J. McKay.  All rights reserved.\n" .
+    "Copyright (C) 2011-2017 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
     "http://gnu.org/licenses/agpl.html\n" .
     "This is free software: you are free to change and redistribute it.\n" .
@@ -603,8 +603,11 @@ BUGS
        there do not seem to be any identifiers available for DSA with longer
        hash algorithms anyway.
 
-       The ability to sign using whirlpool, which requires use of an unofficial
-       OID (1.2.840.113549.1.1.15) should, perhaps, not be allowed.
+       The ability to sign using whirlpool, should, perhaps, not be allowed.
+       However, the RFC 6931 standard is very clear in section 2.3.8 that the
+       "RSA-Whirlpool" combination always uses RSA so specifying the whirlpool
+       OID 1.0.10118.3.0.55 as both the hash algorithm and signature algorithm
+       should be sufficient.
 
 HELP
 }
@@ -1413,17 +1416,19 @@ sub GetDigest($)
 {
   my $dgst = shift;
   my $sha1   = DEROID('1.3.14.3.2.26');
-  my $sha224 = DEROID('2.16.840.1.101.3.4.2.4');
-  my $sha256 = DEROID('2.16.840.1.101.3.4.2.1');
-  my $sha384 = DEROID('2.16.840.1.101.3.4.2.2');
-  my $sha512 = DEROID('2.16.840.1.101.3.4.2.3');
-  my $whirlpoolAlgorithm = DEROID('1.0.10118.3.0.55');
-  my $sha1WithRSAEncryption   = DEROID('1.2.840.113549.1.1.5');
-  my $sha224WithRSAEncryption = DEROID('1.2.840.113549.1.1.14');
-  my $sha256WithRSAEncryption = DEROID('1.2.840.113549.1.1.11');
-  my $sha384WithRSAEncryption = DEROID('1.2.840.113549.1.1.12');
-  my $sha512WithRSAEncryption = DEROID('1.2.840.113549.1.1.13');
-  my $whirlpoolWithRSAEncryption = DEROID('1.2.840.113549.1.1.15');
+  my $sha224 = DEROID('2.16.840.1.101.3.4.2.4'); # RFC 3560
+  my $sha256 = DEROID('2.16.840.1.101.3.4.2.1'); # RFC 3560
+  my $sha384 = DEROID('2.16.840.1.101.3.4.2.2'); # RFC 3560
+  my $sha512 = DEROID('2.16.840.1.101.3.4.2.3'); # RFC 3560
+  my $whirlpoolAlgorithm = DEROID('1.0.10118.3.0.55'); # RFC 6931
+  my $sha1WithRSAEncryption   = DEROID('1.2.840.113549.1.1.5');  # RFC 2437
+  my $sha224WithRSAEncryption = DEROID('1.2.840.113549.1.1.14'); # RFC 4055
+  my $sha256WithRSAEncryption = DEROID('1.2.840.113549.1.1.11'); # RFC 4055
+  my $sha384WithRSAEncryption = DEROID('1.2.840.113549.1.1.12'); # RFC 4055
+  my $sha512WithRSAEncryption = DEROID('1.2.840.113549.1.1.13'); # RFC 4055
+  my $sha512_224WithRSAEncryption = DEROID('1.2.840.113549.1.1.15'); # RFC 8017
+  my $sha512_256WithRSAEncryption = DEROID('1.2.840.113549.1.1.16'); # RFC 8017
+  my $whirlpoolWithRSAEncryption = DEROID('1.0.10118.3.0.55'); # RFC 6931 2.3.8
   return ($sha1, $sha1WithRSAEncryption, \&sha1) if $dgst eq 'sha1';
   my $h = undef;
   my $oid = undef;
@@ -2227,13 +2232,25 @@ sub main
   warn "*** Warning: sha1 use is strongly discouraged, continuing anyway\n"
     if !$quiet && $digest eq 'sha1';
   warn <<EOT if !$quiet && $digest eq 'whirlpool';
-*** Warning: whirlpool use requires an unofficial OID (1.2.840.113549.1.1.15)
-***          be used for whirlpoolWithRSAEncryption.  See the following:
-***          http://openssl.6102.n7.nabble.com/Creating-a-x509-request-with-Whirlpool-td27209.html#message27213
-***          Such certificates are unlikely to work.  So unless you have a
-***          specific application that you know supports the unofficial value
-***          for whirlpoolWithRSAEncryption you should select a different
-***          signing digest.  Continuing anyway.
+*** Warning: whirlpool use requires use of the same OID (1.0.10118.3.0.55)
+***          for both the hash algorithm and signature algorithm identifiers.
+***          While this is an official OID and RFC 6931 section 2.3.8 does
+***          make it clear that the only valid encryption method to be used
+***          with whirlpool is RSA, such certificates are unlikely to work.
+***
+***          Previous versions of this software used an unofficial OID
+***          suggested on one of the OpenSSL mailing lists for the signature
+***          algorithm identifier, but that's really not necessary as RFC 6931
+***          makes it clear that use of whirlpool implies use of RSA.  RFC 8017
+***          has since assigned that unofficial OID officially to something
+***          else so it must not be used as an RSA-Whirlpool unofficial OID.
+***
+***          Unless you have a specific application that you know supports use
+***          of the whirlpool OID as the encryption identifier, you should
+***          select a different signing digest as whirlpool certificates are
+***          unlikely to work.
+***
+***          Continuing anyway.
 EOT
   print STDERR "Using digest $digest\n" if $verbose;
 
