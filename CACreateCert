@@ -139,10 +139,12 @@ DESCRIPTION
 
        The public key for the certificate being created may be provided in
        either OpenSSH .pub format or X.509 public key format.  The
-       "openssl rsa -pubout" or "openssl x509 -noout -pubkey" commands can be
-       used to produce an X.509 format public key from either an RSA private key
-       or an X.509 certificate respectively.  Note that only OpenSSH RSA public
-       keys in protocol format 2 are supported (they start with "ssh-rsa ").
+       "openssl rsa -pubout" or "openssl x509 -noout -pubkey" or
+       "openssl req -noout -pubkey" command can be used to produce an X.509
+       format public key from either an RSA private key or an X.509 certificate
+       or an X.509 certificate signing request respectively.  Note that only
+       OpenSSH RSA public keys in protocol format 2 are supported (they start
+       with "ssh-rsa ").
 
        When creating a root certificate no public key is required.
 
@@ -180,7 +182,9 @@ DESCRIPTION
        input arguments only so long as neither the --random nor --now options
        are used.
 
-       Also note that the certificates created by this utility do not expire.
+       Also note that the root certificates created by this utility do not
+       expire.  Non-root certificates receive the same notAfter date as their
+       signing certificate.
 
 OPTIONS
        -h/--help
@@ -503,6 +507,19 @@ TIPS
        Convert a regular certificate into a certificate request using openssl:
 
          openssl x509 -in cert.pem -signkey key.pem -x509toreq -out csr.pem
+
+       Verify the signature of a certificate signing request:
+
+         openssl req -in csr.pem -noout -verify
+
+       Extract the subject of a certificate signing request into a form that
+       can be passed using the "--dni \@dnifile.txt" format:
+
+         openssl req -in csr.pem -noout -subject |
+         sed 's,^subject= */,,;y,/,\\n,' >dnifile.txt
+
+       The same trick can be used on X.509 certificates simply by substituting
+       "x509" for "req" in the "openssl" command.
 
 EXAMPLES
        Valid certificate chains always must contain at least two certificates,
