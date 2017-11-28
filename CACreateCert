@@ -36,7 +36,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.3.4';
+  *VERSION = \'1.3.5';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (C) 2011-2017 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -2330,12 +2330,12 @@ EOT
   my $serialRDN;
   if ($useRandom) {
     $randval = RandomID($quiet);
-    $serialRDN = join(":", tolower(unpack("H*",$randval))=~/../g) if $root;
+    $serialRDN = join(":", tolower(unpack("H*",$randval))=~/../g);
   }
   my $sigAlg = $dalg . pack('CC',0x05,0x00);
   $sigAlg = pack('C',0x30).DERLength(length($sigAlg)).$sigAlg;
   my $stuffedrand = '';
-  if ($root && $useRandom && $seensingletons{'2.5.4.5'}) {
+  if ($useRandom && $seensingletons{'2.5.4.5'}) {
     foreach my $rdn (@dnseq) {
       if (@$rdn == 1 && ${$$rdn[0]}[0] eq '2.5.4.5') {
         if (${$$rdn[0]}[1] eq '#') {
