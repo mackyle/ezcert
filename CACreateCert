@@ -36,7 +36,7 @@ my $USAGE;
 my $hasSha2;
 
 BEGIN {
-  *VERSION = \'1.3.5';
+  *VERSION = \'1.4.0';
   $VERSIONMSG = "CACreateCert version $VERSION\n" .
     "Copyright (C) 2011-2017 Kyle J. McKay.  All rights reserved.\n" .
     "License AGPLv3+: GNU Affero GPL version 3 or later.\n" .
@@ -108,7 +108,7 @@ Usage: CACreateCert [-h] [--version] [--verbose] [--debug] [--quiet] [--check]
          [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pub_key_file] [--out out_cert.pem]
          [--cert signing_cert] [--dni k=v] [--dns "name-or-ip"] [--dnq "qual"]
-         --key priv_key_file "name string"
+         [--request [--no-extensions]] [--utf8] --key priv_key_file "name str"
 USAGE
   $HELP = <<HELP;
 NAME
@@ -121,7 +121,7 @@ SYNOPSIS
          [--client] [--rootauth] [--authext] [--pathlen n] [--suffix suffix.pem]
          [--random | --no-random] [--in pubkeyfile] [--out pemcertfile]
          [--cert signing_cert] [--dni k=v] [--dns "name-or-ip"] [--dnq "qual"]
-         --key priv_key_file "name string"
+         [--request [--no-extensions]] [--utf8] --key priv_key_file "name str"
        CACreateCert --root [--random] --key priv_key_file "name string" > ca.pem
        CACreateCert --key priv_key_file --cert signing_cert "name string"
          < pub_key_file > out_cert.pem
@@ -186,6 +186,11 @@ DESCRIPTION
        expire.  Non-root certificates receive the same notAfter date as their
        signing certificate.
 
+       Instead of actually outputting an X.509 certificate, adding the
+       --request option will output a Certificate Signing Request (CSR).  In
+       which case the --cert (if given) and public key (if provided) are
+       completely ignored -- only the --key is required to create a CSR.
+
 OPTIONS
        -h/--help
               Show this help
@@ -225,6 +230,14 @@ OPTIONS
               to the current time.  Use of this option will preclude production
               of byte-exact matching output certificates for the same input
               arguments.
+
+       --utf8
+              Normally strings that can be encoded as either a PrintableString
+              or a UTF8String are encoded as a PrintableString if they contain
+              only PrintableString characters.  Using this option causes such
+              strings to always use UTF8String instead.  Note that this option
+              does NOT affect the encoding of any items that are required to
+              use a different type.
 
        --pubx509/--pubX509
               Force the public key read from standard input to be interpreted
@@ -278,6 +291,21 @@ OPTIONS
               implied), --codesign, --email or --applecodesign are given then
               extended key usage items will be included (up to five -- one for
               each option given).
+
+       --request
+              Output a Certificate Signing Request (CSR) instead of a standard
+              X.509 certificate.  Note that this causes any --cert or provided
+              public key to be completely ignored.  It may be used with any of
+              the certificate types.  The output CSR will be self-signed by the
+              given --key.
+
+       --no-extensions
+              Only valid when used with --request.  Normally when creating a
+              CSR the extensions that would have been included in the X.509
+              certificate are included in a special section of the CSR.  If
+              this option is given then the extensions section of the CSR will
+              be completely omitted.  Use of this option is not recommended
+              unless the expected consumer of the produced CSR requires it.
 
        --acme
               Giving this option causes most of the other options to be ignored.
@@ -603,6 +631,31 @@ EXAMPLES
        alternatively the email_certs.p12 file.
        (Some email software will let you squeak by without root_cert.pem.)
 
+       '''CREATING AN EMAIL CERTIFICATE SIGNING REQUEST'''
+
+       Instead of using a self-generated "Acme" root certificate, this example
+       creates a Certificate Signing Request (CSR), sends it off to be turned
+       into a signed X.059 email certificate and then uses that.
+
+       1. Generate an email certificate key:
+
+          openssl genrsa -f4 -out email_key.pem 3072
+
+       2. Generate an email CSR for "John Smith" <jsmith\@example.com>:
+
+          CACreateCert --request --email --key email_key.pem \
+            --out email_csr.pem --dni CN="John Smith" "jsmith\@example.com"
+
+       3. Send the email_csr.pem file to your certificate authority and wait.
+
+       4. Eventually receive a signed certificate file back.  It may be in
+          PEM, DER or even possibly P12 format.
+
+          To convert into P12 format see step (5) above.  In this case the
+          -certfile option to "openssl pkcs12" may be omitted.
+
+       At this point it should be possible to configure an email client; see
+       the directions above after step (5).
 
 BUGS
        The ability to create self-signed types other than --root by combining
@@ -1761,6 +1814,7 @@ sub validate_oid_value($$$;$$)
 
 sub get_oid_string_type($$)
 {
+  our $useutf8;
   my ($oid, $value) = @_;
   if (defined($oidstringtypes{$oid})) {
     my $st = $oidstringtypes{$oid};
@@ -1769,7 +1823,7 @@ sub get_oid_string_type($$)
     return 22 if $st eq 'i';
     die "Invalid \%oidstringtype value '$st' for $oid\n";
   }
-  return 19 if $value =~ m|^[A-Za-z0-9 '()+,./:=?-]*$|os;
+  return 19 if !$useutf8 && $value =~ m|^[A-Za-z0-9 '()+,./:=?-]*$|os;
   return 12;
 }
 
@@ -1857,6 +1911,7 @@ sub main
   my $keyfile = '';
   my $certfile = '';
   my $useNow = '';
+  our $useutf8 = '';
   our $useRandom = '';
   my $useNoRandom = '';
   my $termOK = '';
@@ -1869,6 +1924,8 @@ sub main
   my $subca = '';
   our $root = '';
   my $rootauth = '';
+  our $request = '';
+  my $noext = '';
   my $authext = '';
   my $digest = $hasSha2 ? 'sha256' : 'sha1';
   my $digestChoice = '';
@@ -1896,6 +1953,8 @@ sub main
   my $boolFALSE = pack('C*',0x01,0x01,0x00);
   my $v3Begin = pack('C',0x17).DERLength(13)."970811000000Z";
   my $noExpiry = pack('C',0x18).DERLength(15)."99991231235959Z";
+  my $csrPwCheck = DEROID('1.2.840.113549.1.9.11');
+  my $csrExtReq = DEROID('1.2.840.113549.1.9.14');
   my $infile = '-';
   my $outfile = '-';
   my @suffixfiles = ();
@@ -1916,6 +1975,7 @@ sub main
       "check" => \$check,
       "acme" => \$acme,
       "now" => \$useNow,
+      "utf8" => \$useutf8,
       "random" => \$useRandom,
       "no-random" => \$useNoRandom,
       "no-max-len" => \$nomaxlen,
@@ -1928,6 +1988,8 @@ sub main
       "subca" => \$subca,
       "root" => \$root,
       "rootauth" => \$rootauth,
+      "request" => \$request,
+      "no-extensions" => \$noext,
       "authext" => \$authext,
       "digest=s" => \$digestChoice,
       "key|k=s" => \$keyfile,
@@ -1956,7 +2018,8 @@ sub main
   die "--acme and --check are not compatible\n" if $acme && $check;
   die("May not combine --random and --no-random\n", $USAGE)
     if $root && $useRandom && $useNoRandom;
-  $useRandom = 1 if $root && !$useNoRandom;
+  die "--no-extensions requires use of --request\n" if $noext && !$request;
+  $useRandom = 1 if (!$request || !$noext) && $root && !$useNoRandom;
   my @dnseq = ();
   if ($acme) {
     $useNow = '';
@@ -1978,7 +2041,7 @@ sub main
       [[$oidnames{'cn'}, 'Acme Root Certificate']]
     );
   }
-  die "--in requires a filename\n" if !$root && !$infile;
+  die "--in requires a filename\n" if !$request && !$root && !$infile;
   die "--out requires a filename\n" if !$outfile;
   foreach my $suffixfile (@suffixfiles) {
     die "--suffix requires a filename\n" if defined($suffixfile) && !$suffixfile;
@@ -1987,7 +2050,7 @@ sub main
   }
   $client = 1 if
     !$root && !$subca && !$server && !$codesign && !$applecodesign && !$email;
-  my $dnistdinok = $root || $infile ne '-';
+  my $dnistdinok = $request || $root || $infile ne '-';
   my ($emailatok, $emailatseen);
   if (!$client && $email && defined($ARGV[0]) && $ARGV[0] ne "") {
     $emailatok = $ARGV[0];
@@ -2022,13 +2085,13 @@ sub main
   my $n = 'n';
   $keytype = 'pubx509', $n = '' if $pubx509;
   die("Missing required --key option\n", $USAGE) if !$keyfile;
-  die("Missing required --cert option\n", $USAGE) if !$root && !$certfile;
+  die("Missing required --cert option\n", $USAGE) if !$request && !$root && !$certfile;
   die("Must have exactly one \"name string\" argument\n", $USAGE)
     if !$check && !$acme && @ARGV != 1;
   die "Standard input is a tty (which is an unlikely source of a$n $keytype "
     . "public key)\n"
     . "If that's what you truly meant, add the -t option to allow it.\n"
-    if !$root && $infile eq '-' && -t STDIN && !$termOK;
+    if !$request && !$root && $infile eq '-' && -t STDIN && !$termOK;
   my $emptynameok = $check || ($root && $useRandom);
   if (!$emptynameok && $ARGV[0] eq '') {
     if ($client) {
@@ -2069,7 +2132,7 @@ sub main
     $suffix .= <SUFFIX>;
     close(SUFFIX);
   }
-  if (!$root) {
+  if (!$request && !$root) {
     local $/ if $pubx509;
     my $input;
     if ($infile ne '-') {
@@ -2109,10 +2172,11 @@ sub main
     close($input) if $infile ne '-';
   }
   die "Cannot read key file $keyfile\n" if ! -r $keyfile;
-  die "Cannot read certificate file $certfile\n" if !$root && ! -r $certfile;
+  die "Cannot read certificate file $certfile\n"
+    if !$request && !$root && ! -r $certfile;
 
   my ($sshkeybits,$sshkeyexp,$sshkeyid,$sfmd5,$sfsha1,$sshcmnt,$opensshpub);
-  if ($root) {
+  if ($request || $root) {
     # need to set $sshkeyid to $pubkeyid
     # need to set $opensshpub to $pubkey
     # but don't have either yet, so do it later
@@ -2148,7 +2212,7 @@ sub main
       unless $sshkeyexp;
   }
   my $sshkeystrength;
-  if (!$root) {
+  if (!$request && !$root) {
     my $sshkeyapprox;
     ($sshkeystrength, $sshkeyapprox) = compute_rsa_strength($sshkeybits);
     printf(STDERR "$keytype Public Key Info:\n".
@@ -2193,9 +2257,9 @@ sub main
       unless !!($pubkey = <READKEY>);
     close(READKEY);
   }
-  $opensshpub = $pubkey if $root;
+  $opensshpub = $pubkey if $request || $root;
   my ($pubkeybits,$pubkeyexp,$pubkeyid,$pfmd5,$pfsha1) = GetKeyInfo($pubkey);
-  $sshkeyid = $pubkeyid if $root;
+  $sshkeyid = $pubkeyid if $request || $root;
   die "Unparseable public key format in \"$keyfile\"\n" unless $pubkeybits;
   my ($pubkeystrength, $pubkeyapprox) = compute_rsa_strength($pubkeybits);
   printf(STDERR "RSA Private Key $keyfile:\n".
@@ -2272,7 +2336,7 @@ EOT
   print STDERR "Using digest $digest\n" if $verbose;
 
   my ($cver,$cser,$issuer,$vst,$vnd,$subj,$subjkey,$subjkeyid);
-  if ($root) {
+  if ($request || $root) {
     $vst = $v3Begin;
     $vnd = $noExpiry;
     $subjkeyid = $pubkeyid;
@@ -2325,7 +2389,9 @@ EOT
   }
   return 0 if $check;
 
-  my $version = pack('CCCCC', 0xA0, 0x03, 0x02, 0x01, 0x02); # v3
+  my $version = $request ?
+    pack('CCC', 0x02, 0x01, 0x00) : # CSR v1
+    pack('CCCCC', 0xA0, 0x03, 0x02, 0x01, 0x02); # X.509 v3
   my $randval;
   my $serialRDN;
   if ($useRandom) {
@@ -2374,7 +2440,7 @@ EOT
     $name .= $dnq;
   }
   $name = pack('C',0x30).DERLength(length($name)).$name;
-  $subj = $name if $root;
+  $subj = $name if $request || $root;
   my $validity = ($useNow ? DERTime(time()) : $vst).$vnd;
   $validity = pack('C',0x30).DERLength(length($validity)).$validity;
   my $extCAVal;
@@ -2419,9 +2485,9 @@ EOT
   $extSubjKey = $subjKeyId . $extSubjKey;
   $extSubjKey = pack('C',0x30).DERLength(length($extSubjKey)).$extSubjKey;
   my $extAuthKey = '';
-  if (!$root || $rootauth) {
+  if (!($request || $root) || $rootauth) {
     $extAuthKey = pack('C',0x80).DERLength(length($pubkeyid)).$pubkeyid;
-    if (!$root && $authext) {
+    if (!($request || $root) && $authext) {
       my $gen = pack('C',0xA4).DERLength(length($issuer)).$issuer;
       $extAuthKey .= pack('C',0xA1).DERLength(length($gen)).$gen;
       $extAuthKey .= pack('C',0x82).DERLength(length($cser)).$cser;
@@ -2450,21 +2516,34 @@ EOT
     $exts .= $extSubjAlt;
   }
   $exts = pack('C',0x30).DERLength(length($exts)).$exts;
-  $exts = pack('C',0xA3).DERLength(length($exts)).$exts;
   my $serial;
-  if ($useRandom) {
-    $serial = pack('C',0x2).DERLength(length($randval)).$randval;
+  my $tbsSigAlg = $sigAlg;
+  if ($request) {
+    $serial = $tbsSigAlg = $subj = $validity = '';
+    if ($noext) {
+      $exts = '';
+    } else {
+      $exts = $csrExtReq . pack('C',0x31).DERLength(length($exts)).$exts;
+      $exts = pack('C',0x30).DERLength(length($exts)).$exts;
+    }
+    # possibly add $csrPwCheck attribute at some point here
+    $exts = pack('C',0xA0).DERLength(length($exts)).$exts;
+  } else {
+    $exts = pack('C',0xA3).DERLength(length($exts)).$exts;
+    if ($useRandom) {
+      $serial = pack('C',0x2).DERLength(length($randval)).$randval;
+    }
+    else {
+      my $idtohash = $version.$sigAlg.$subj.$validity.$name.$opensshpub.$exts;
+      $idtohash = pack('C',0x30).DERLength(length($idtohash)).$idtohash;
+      my $idhash = sha1($idtohash);
+      my $byte0 = unpack('C',substr($idhash,0,1));
+      $byte0 &= 0x7F;
+      substr($idhash,0,1) = pack('C',$byte0);
+      $serial = pack('C',0x2).DERLength(length($idhash)).$idhash;
+    }
   }
-  else {
-    my $idtohash = $version.$sigAlg.$subj.$validity.$name.$opensshpub.$exts;
-    $idtohash = pack('C',0x30).DERLength(length($idtohash)).$idtohash;
-    my $idhash = sha1($idtohash);
-    my $byte0 = unpack('C',substr($idhash,0,1));
-    $byte0 &= 0x7F;
-    substr($idhash,0,1) = pack('C',$byte0);
-    $serial = pack('C',0x2).DERLength(length($idhash)).$idhash;
-  }
-  my $tbs = $version.$serial.$sigAlg.$subj.$validity.$name.$opensshpub.$exts;
+  my $tbs = $version.$serial.$tbsSigAlg.$subj.$validity.$name.$opensshpub.$exts;
   $tbs = pack('C',0x30).DERLength(length($tbs)).$tbs;
   my $tbsseq = &$dfunc($tbs);
   $tbsseq = pack('C',0x04).DERLength(length($tbsseq)).$tbsseq;
@@ -2484,9 +2563,10 @@ EOT
   } else {
     $output = *STDOUT;
   }
-  print $output "-----BEGIN CERTIFICATE-----\n",
+  my $r = $request ? " REQUEST" : "";
+  print $output "-----BEGIN CERTIFICATE$r-----\n",
                 $base64,
-                "-----END CERTIFICATE-----\n",
+                "-----END CERTIFICATE$r-----\n",
                 $suffix;
   close($output) if $outfile ne '-';
   return 0;
